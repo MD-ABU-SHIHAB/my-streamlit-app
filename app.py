@@ -1,8 +1,8 @@
 """
 app.py — Islamic ruling reference search (CSE 469 capstone)
 
-Retrieval-first search over dataset.csv (exact match -> TF-IDF cosine
-similarity -> fuzzy match -> honest no-match state), with a Logistic
+Retrieval-first search over dataset.csv (exact match → TF-IDF cosine
+similarity → fuzzy match → honest no-match state), with a Logistic
 Regression classifier used only as a secondary confirmation signal, never
 as the primary displayed answer. Includes a browse/filter mode.
 
