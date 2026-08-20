@@ -1,8 +1,8 @@
 """
 app.py — Islamic ruling reference search (CSE 469 capstone)
 
-Retrieval-first search over dataset.csv (exact match → TF-IDF cosine
-similarity → fuzzy match → honest no-match state), with a Logistic
+Retrieval-first search over dataset.csv (exact match -> TF-IDF cosine
+similarity -> fuzzy match -> honest no-match state), with a Logistic
 Regression classifier used only as a secondary confirmation signal, never
 as the primary displayed answer. Includes a browse/filter mode.
 
@@ -86,6 +86,17 @@ ENGLISH_STOPWORDS = {
 NEEDS_VERIFICATION_LABEL = "NEEDS_VERIFICATION"
 PLACEHOLDER_REFERENCE_TEXT = "SEE_REFERENCE_SOURCE"
 
+# Real Qur'anic section-divider glyph (rub' el hizb), used as the result
+# marker. Not a decorative emoji — it is the actual mark used in printed
+# Mus'haf pages to divide sections, which is why it belongs here.
+SECTION_MARK = "\u06de"  # ۞
+
+STAGE_LABELS = {
+    "exact_match": "Exact match",
+    "tfidf_cosine": "TF-IDF · cosine similarity",
+    "fuzzy_match": "Approximate match",
+}
+
 
 # --------------------------------------------------------------------------- #
 # DATA MODELS
@@ -163,7 +174,7 @@ def build_combined_text(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def build_banglish_map(df: pd.DataFrame) -> dict[str, set[str]]:
-    """Build an extendable synonym map from the dataset's own search_keywords + question_banglish.
+    """Build an extendable synonym map from the dataset's own search_keywords.
 
     For every row, its search_keywords terms are treated as one synonym
     group — any term in the group maps to every other term in that group.
@@ -177,8 +188,7 @@ def build_banglish_map(df: pd.DataFrame) -> dict[str, set[str]]:
     question_banglish is a full sentence containing generic connector words
     ("ki", "kora", "deya"...) that recur across almost every row. Grouping
     on those connector words would transitively merge unrelated rows'
-    synonym groups into one another (row A and row B both use "ki", so A's
-    and B's vocabulary would incorrectly become "synonyms" of each other).
+    synonym groups into one another.
     """
     banglish_map: dict[str, set[str]] = {}
     for _, row in df.iterrows():
@@ -207,7 +217,7 @@ def normalize_query(query: str, banglish_map: dict[str, set[str]]) -> str:
 # CLASSIFIER (secondary confirmation signal only — never the primary answer)
 # --------------------------------------------------------------------------- #
 
-@st.cache_resource(show_spinner="Preparing search index...")
+@st.cache_resource(show_spinner="Indexing the reference set…")
 def train_classifier(df: pd.DataFrame):
     """Fit the TF-IDF vectorizer + Logistic Regression once at startup.
 
@@ -264,15 +274,9 @@ def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame
     meaningful = {t for t in _tokenize(query) if len(t) >= MEANINGFUL_TOKEN_MIN_LEN}
     if not meaningful:
         return None
-    # normalize_query() pulls in the dataset's own synonym spellings for each
-    # meaningful token, so e.g. a query token "namaz" also counts a row that
-    # only contains the dataset's spelling "namaj".
     expanded_str = normalize_query(query, banglish_map)
     expanded = {t for t in _tokenize(expanded_str) if len(t) >= MEANINGFUL_TOKEN_MIN_LEN}
 
-    # Short queries (<=2 meaningful tokens) must match ALL of them to avoid a
-    # single generic word ("haram", "prayer") over-confidently picking one
-    # arbitrary row out of many that legitimately contain that word.
     required_hits = len(meaningful) if len(meaningful) <= 2 else max(2, -(-len(meaningful) * 6 // 10))
 
     field_tokens = df[search_cols].fillna("").agg(" ".join, axis=1).apply(_tokenize)
@@ -328,8 +332,6 @@ def retrieve_candidates(
     if row is not None:
         return RetrievalResult(row=row, stage="fuzzy_match", similarity=ratio)
 
-    # No confident match at any stage: gather the closest suggestions by
-    # TF-IDF similarity anyway, so the user has somewhere useful to go.
     suggestions = []
     if query_clean.strip():
         q_vec = vectorizer.transform([query_clean])
@@ -351,269 +353,276 @@ def classify_query(query: str, vectorizer, classifier) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------- #
-# UI — STYLE
+# UI — DESIGN TOKENS & STYLE
+#
+# Direction: a hushed reading-room / critical-edition aesthetic. The subject
+# is a reference library of verified rulings, so retrieval metadata (match
+# stage, score, classifier agreement) is treated like a scholarly edition's
+# critical apparatus — small, typographic, in the margin — rather than a
+# dashboard with progress bars. Category identity is a single accent color
+# plus label text, never a badge palette per category. The one deliberate
+# "signature" touch is the rub' el hizb mark (۞) — the real section-divider
+# glyph used in printed Qur'an pages — and a catalog-style reference number
+# on each entry, both grounded in the subject rather than decorative.
 # --------------------------------------------------------------------------- #
 
 def inject_css() -> None:
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Tiro+Bangla&family=Noto+Serif+Bengali:wght@400;600;700&family=Noto+Sans+Bengali:wght@300;400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
         :root {
-            --bg: #F8F5EE;
-            --card: #FFFFFF;
-            --card-border: #E6E0D0;
-            --text: #1F2937;
-            --text-secondary: #6B7280;
-            --accent: #1E40AF;
-            --accent-hover: #1E3A8A;
-            --accent-soft: #DBEAFE;
-            --success: #065F46;
-            --success-soft: #D1FAE5;
-            --warning: #92400E;
-            --warning-soft: #FEF3C7;
-            --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.05);
-            --shadow-hover: 0 4px 6px rgba(0,0,0,0.1), 0 10px 20px rgba(0,0,0,0.08);
-            --radius: 12px;
-            --radius-sm: 8px;
+            --paper: #F2ECDD;
+            --card: #FBF8EF;
+            --ink: #2B2A24;
+            --ink-muted: #7A7360;
+            --accent: #2F4858;
+            --accent-soft: #E4DEC9;
+            --hairline: #DDD3B8;
+            --flag-bg: #F3E6C8;
+            --flag-ink: #8C6B2F;
+            --font-display: 'Noto Serif Bengali', Georgia, serif;
+            --font-body: 'Noto Sans Bengali', 'Inter', sans-serif;
+            --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+            --space-1: 0.4rem;
+            --space-2: 0.8rem;
+            --space-3: 1.4rem;
+            --space-4: 2.2rem;
+            --space-5: 3.2rem;
         }
 
         html, body, [class*="css"] {
-            background-color: var(--bg);
-            color: var(--text);
-            font-family: 'Noto Sans Bengali', 'Inter', sans-serif;
+            background-color: var(--paper) !important;
+            color: var(--ink);
+            font-family: var(--font-body);
         }
-
-        .block-container {
-            max-width: 800px;
-            padding-top: 2rem;
-            padding-bottom: 3rem;
-        }
-
+        .block-container { max-width: 700px; padding-top: var(--space-4); padding-bottom: var(--space-5); }
         #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; }
 
-        h1, h2, h3, .app-heading {
-            font-family: 'Tiro Bangla', 'Noto Serif Bengali', Georgia, serif;
-            color: var(--text);
-            font-weight: 700;
+        /* Accessible focus states — never remove outline without replacing it */
+        a:focus-visible, button:focus-visible, input:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { animation: none !important; transition: none !important; }
         }
 
-        .app-header {
-            text-align: center;
-            margin-bottom: 2rem;
-            padding: 2rem 0;
+        /* ---------- Header ---------- */
+        .app-eyebrow {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+            margin-bottom: var(--space-1);
         }
         .app-title {
-            font-size: 2.2rem;
-            margin-bottom: 0.3rem;
-            letter-spacing: -0.01em;
-        }
-        .app-title-accent {
-            color: var(--accent);
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 2.1rem;
+            color: var(--ink);
+            margin-bottom: var(--space-1);
+            line-height: 1.15;
         }
         .app-subtitle {
-            font-family: 'Noto Sans Bengali', 'Inter', sans-serif;
-            color: var(--text-secondary);
+            font-family: var(--font-body);
+            color: var(--ink-muted);
             font-size: 0.95rem;
-            font-weight: 400;
+        }
+        .app-rule {
+            border: none;
+            border-top: 1px solid var(--hairline);
+            margin: var(--space-3) 0 var(--space-4) 0;
         }
 
+        /* ---------- Search ---------- */
         div[data-testid="stTextInput"] input {
             background-color: var(--card);
-            border: 1.5px solid var(--card-border);
-            border-radius: var(--radius-sm);
-            color: var(--text);
-            font-size: 1rem;
-            padding: 0.75rem 1rem;
-            transition: border-color 0.2s, box-shadow 0.2s;
+            border: 1px solid var(--hairline);
+            border-radius: 3px;
+            color: var(--ink);
+            font-size: 1.08rem;
+            padding: 0.85rem 1rem;
         }
         div[data-testid="stTextInput"] input:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.15);
+            box-shadow: 0 0 0 1px var(--accent);
         }
+        div[data-testid="stTextInput"] input::placeholder { color: var(--ink-muted); opacity: 0.8; }
 
         .stButton > button {
             background-color: var(--accent);
-            color: white;
+            color: var(--card);
             border: none;
-            border-radius: var(--radius-sm);
-            padding: 0.55rem 1.4rem;
-            font-family: 'Noto Sans Bengali', 'Inter', sans-serif;
-            font-weight: 600;
-            font-size: 0.9rem;
-            transition: background-color 0.2s;
-        }
-        .stButton > button:hover {
-            background-color: var(--accent-hover);
-            color: white;
-        }
-
-        .result-card {
-            background-color: var(--card);
-            border: 1px solid var(--card-border);
-            border-radius: var(--radius);
-            padding: 1.5rem 1.75rem;
-            margin-top: 1.2rem;
-            box-shadow: var(--shadow);
-            transition: box-shadow 0.2s;
-        }
-        .result-card:hover {
-            box-shadow: var(--shadow-hover);
-        }
-
-        .result-question-bn {
-            font-family: 'Tiro Bangla', 'Noto Serif Bengali', Georgia, serif;
-            font-size: 1.25rem;
-            font-weight: 700;
-            margin-bottom: 0.35rem;
-            color: var(--text);
-        }
-        .result-question-en {
-            font-family: 'Noto Sans Bengali', 'Inter', sans-serif;
-            font-size: 0.95rem;
-            color: var(--text-secondary);
-            margin-bottom: 0.8rem;
-        }
-
-        .badge-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
-        }
-        .badge {
-            display: inline-block;
-            padding: 0.25rem 0.7rem;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            letter-spacing: 0.02em;
-        }
-        .badge-tier {
-            background-color: var(--accent-soft);
-            color: var(--accent);
-        }
-        .badge-strictness {
-            background-color: #F3F4F6;
-            color: #374151;
-            border: 1px solid #E5E7EB;
-        }
-        .badge-warning {
-            background-color: var(--warning-soft);
-            color: var(--warning);
-        }
-
-        .explanation-text {
-            font-size: 0.95rem;
-            line-height: 1.65;
-            margin-bottom: 1rem;
-            color: var(--text);
-        }
-        .explanation-bn {
-            font-family: 'Noto Sans Bengali', 'Inter', sans-serif;
+            border-radius: 3px;
+            padding: 0.5rem 1.2rem;
+            font-family: var(--font-body);
             font-weight: 500;
-        }
-        .explanation-en {
-            font-family: 'Noto Sans Bengali', 'Inter', sans-serif;
-            color: #4B5563;
-        }
-
-        .citation-block {
-            border-left: 3px solid var(--accent);
-            background-color: #F9FAFB;
-            border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-            padding: 0.7rem 1rem;
-            color: #374151;
-            font-size: 0.85rem;
-            font-style: italic;
-            margin-bottom: 0.7rem;
-        }
-        .citation-source {
-            font-weight: 600;
-            font-style: normal;
-        }
-
-        .related-section {
-            margin-top: 1.2rem;
-            padding-top: 0.8rem;
-            border-top: 1px solid var(--card-border);
-        }
-        .related-title {
-            font-size: 0.8rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--text-secondary);
-            margin-bottom: 0.5rem;
-        }
-        .related-item {
-            padding: 0.4rem 0;
-            border-bottom: 1px solid #F3F4F6;
             font-size: 0.88rem;
-            color: #374151;
-            cursor: pointer;
-            transition: color 0.15s;
+            letter-spacing: 0.02em;
+            transition: background-color 120ms ease;
         }
-        .related-item:last-child {
-            border-bottom: none;
-        }
-        .related-item:hover {
-            color: var(--accent);
+        .stButton > button:hover { background-color: #24394A; color: var(--card); }
+
+        /* Mode toggle reads like a catalog tab, not a pill switch */
+        div[role="radiogroup"] { gap: var(--space-3); }
+        div[role="radiogroup"] label {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
         }
 
-        .no-match-box {
+        /* ---------- Result entry ---------- */
+        @keyframes entryFadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .entry {
             background-color: var(--card);
-            border: 1.5px dashed #D1D5DB;
-            border-radius: var(--radius);
-            padding: 2rem;
-            margin-top: 1.2rem;
-            text-align: center;
-            color: var(--text-secondary);
+            border: 1px solid var(--hairline);
+            border-radius: 3px;
+            padding: var(--space-3) var(--space-3) var(--space-2) var(--space-3);
+            margin-top: var(--space-3);
+            animation: entryFadeIn 220ms ease-out;
         }
-        .no-match-icon {
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
+        .entry-refno {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--ink-muted);
+            letter-spacing: 0.05em;
+            margin-bottom: var(--space-2);
         }
-        .no-match-title {
-            font-family: 'Tiro Bangla', 'Noto Serif Bengali', Georgia, serif;
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: var(--text);
+        .entry-question {
+            font-family: var(--font-display);
+            font-size: 1.2rem;
+            font-weight: 600;
+            line-height: 1.4;
             margin-bottom: 0.3rem;
         }
-
-        .app-footer {
-            margin-top: 3rem;
-            padding-top: 1.2rem;
-            border-top: 1px solid var(--card-border);
-            color: #9CA3AF;
+        .entry-question-en {
+            font-family: var(--font-body);
+            font-size: 0.92rem;
+            color: var(--ink-muted);
+            margin-bottom: var(--space-2);
+        }
+        .category-label {
+            font-family: var(--font-body);
             font-size: 0.8rem;
-            text-align: center;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--ink);
+            border-left: 3px solid var(--accent);
+            padding: 0.2rem 0 0.2rem 0.65rem;
+            margin: var(--space-2) 0 var(--space-3) 0;
+        }
+        .category-mark { color: var(--accent); margin-right: 0.4rem; font-weight: 400; }
+
+        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: var(--space-2); }
+
+        .citation-block {
+            border-left: 2px solid var(--hairline);
+            padding: 0.45rem 0 0.45rem 0.85rem;
+            color: var(--ink-muted);
+            font-size: 0.88rem;
+            font-style: italic;
+            margin-bottom: var(--space-2);
+        }
+        .citation-source {
+            display: block;
+            font-family: var(--font-mono);
+            font-style: normal;
+            font-size: 0.76rem;
+            color: var(--ink-muted);
+            margin-top: 0.25rem;
+            letter-spacing: 0.02em;
         }
 
-        div[data-testid="stRadio"] > div {
-            gap: 0.5rem;
+        .verification-flag {
+            display: inline-block;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--flag-ink);
+            background-color: var(--flag-bg);
+            border: 1px solid #E0CD9C;
+            border-radius: 2px;
+            padding: 0.15rem 0.5rem;
+            margin-bottom: var(--space-2);
+            letter-spacing: 0.02em;
         }
-        div[data-testid="stRadio"] label {
+
+        .related-heading {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+            margin: var(--space-2) 0 0.35rem 0;
+            border-top: 1px solid var(--hairline);
+            padding-top: var(--space-2);
+        }
+
+        /* ---------- No-match state ---------- */
+        .no-match-box {
             background-color: var(--card);
-            border: 1px solid var(--card-border);
-            border-radius: var(--radius-sm);
-            padding: 0.45rem 1.2rem;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-weight: 500;
+            border: 1px dashed var(--hairline);
+            border-radius: 3px;
+            padding: var(--space-3);
+            margin-top: var(--space-3);
         }
-        div[data-testid="stRadio"] label:hover {
-            border-color: var(--accent);
-            color: var(--accent);
+        .no-match-heading {
+            font-family: var(--font-display);
+            font-size: 1.05rem;
+            margin-bottom: 0.3rem;
+        }
+        .no-match-body { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
+
+        /* ---------- Clickable list rows (related rulings / suggestions) ---------- */
+        div[data-testid="stButton"] button[kind="secondary"] {
+            background-color: transparent;
+            color: var(--ink);
+            border: none;
+            border-bottom: 1px solid var(--hairline);
+            border-radius: 0;
+            text-align: left;
+            width: 100%;
+            padding: 0.55rem 0.1rem;
+            font-family: var(--font-body);
+            font-weight: 400;
+            font-size: 0.92rem;
+        }
+        div[data-testid="stButton"] button[kind="secondary"]:hover {
+            background-color: var(--accent-soft);
+            color: var(--ink);
+        }
+
+        /* ---------- Browse mode ---------- */
+        .browse-count {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--ink-muted);
+            letter-spacing: 0.05em;
+            margin: var(--space-2) 0 var(--space-1) 0;
+        }
+
+        /* ---------- Footer ---------- */
+        .app-footer {
+            margin-top: var(--space-5);
+            padding-top: var(--space-2);
+            border-top: 1px solid var(--hairline);
+            color: var(--ink-muted);
+            font-size: 0.8rem;
+            line-height: 1.5;
         }
 
         @media (max-width: 480px) {
-            .block-container { padding-left: 1rem; padding-right: 1rem; }
+            .block-container { padding-left: 1.1rem; padding-right: 1.1rem; }
             .app-title { font-size: 1.6rem; }
-            .result-card { padding: 1.2rem 1.1rem; }
-            .app-header { padding: 1rem 0 1.5rem 0; }
+            .entry { padding: var(--space-2); }
         }
         </style>
         """,
@@ -625,106 +634,96 @@ def inject_css() -> None:
 # UI — RENDERING
 # --------------------------------------------------------------------------- #
 
-def _explanation_for(row: pd.Series) -> tuple[str, str]:
-    bn = str(row.get("short_explanation_bn", "")).strip()
-    en = str(row.get("short_explanation_en", "")).strip()
-    return bn, en
+def _explanation_for(row: pd.Series) -> str:
+    parts = []
+    if str(row.get("short_explanation_bn", "")).strip():
+        parts.append(str(row["short_explanation_bn"]).strip())
+    if str(row.get("short_explanation_en", "")).strip():
+        parts.append(str(row["short_explanation_en"]).strip())
+    return " ".join(parts)
 
 
-def _class_badge_colour(tier1_class: str) -> str:
-    """Return a subtle colour token for each class — just visual, not semantic."""
-    return tier1_class
+def _set_pending_query(text: str) -> None:
+    """Route a click on a related/suggested entry back into the search box."""
+    st.session_state["pending_query"] = text
+    st.rerun()
 
 
 def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classifier) -> None:
     row = result.row
+    st.markdown('<div class="entry">', unsafe_allow_html=True)
 
-    st.markdown('<div class="result-card">', unsafe_allow_html=True)
-
-    # Question
-    st.markdown(f'<div class="result-question-bn">{row["question_bn"]}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="entry-refno">Ref. No. {int(row["id"]):04d}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="entry-question">{row["question_bn"]}</div>', unsafe_allow_html=True)
     if str(row.get("question_en", "")).strip():
-        st.markdown(f'<div class="result-question-en">{row["question_en"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="entry-question-en">{row["question_en"]}</div>', unsafe_allow_html=True)
 
-    # Badges
     label = str(row["tier1_class"]).replace("_", " ")
     strictness = str(row.get("strictness_label", "")).strip()
-    st.markdown('<div class="badge-row">', unsafe_allow_html=True)
-    st.markdown(f'<span class="badge badge-tier">{label}</span>', unsafe_allow_html=True)
-    if strictness:
-        st.markdown(f'<span class="badge badge-strictness">{strictness}</span>', unsafe_allow_html=True)
+    label_text = f"{label} — {strictness}" if strictness else label
+    st.markdown(
+        f'<div class="category-label"><span class="category-mark">{SECTION_MARK}</span>{label_text}</div>',
+        unsafe_allow_html=True,
+    )
+
     if str(row.get("verification_status", "")).strip() == NEEDS_VERIFICATION_LABEL:
-        st.markdown('<span class="badge badge-warning">⚠ Unverified reference</span>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="verification-flag">Unverified reference — pending scholarly check</div>',
+            unsafe_allow_html=True,
+        )
 
-    # Explanation
-    bn_expl, en_expl = _explanation_for(row)
-    if bn_expl:
-        st.markdown(f'<div class="explanation-text explanation-bn">{bn_expl}</div>', unsafe_allow_html=True)
-    if en_expl:
-        st.markdown(f'<div class="explanation-text explanation-en">{en_expl}</div>', unsafe_allow_html=True)
+    explanation = _explanation_for(row)
+    if explanation:
+        st.markdown(f'<div class="explanation-text">{explanation}</div>', unsafe_allow_html=True)
 
-    # Citation
     ref_text = str(row.get("reference_text", "")).strip()
     ref_source = str(row.get("reference_source", "")).strip()
-    if ref_source:
-        if ref_text == PLACEHOLDER_REFERENCE_TEXT or not ref_text:
-            citation_body = f'<span class="citation-source">{ref_source}</span>'
-        else:
-            citation_body = f'{ref_text} — <span class="citation-source">{ref_source}</span>'
-        st.markdown(f'<div class="citation-block">{citation_body}</div>', unsafe_allow_html=True)
+    if ref_text and ref_text != PLACEHOLDER_REFERENCE_TEXT:
+        st.markdown(
+            f'<div class="citation-block">{ref_text}<span class="citation-source">{ref_source}</span></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(f'<div class="citation-block"><span class="citation-source">{ref_source}</span></div>', unsafe_allow_html=True)
 
-    # Related
+    st.markdown("</div>", unsafe_allow_html=True)  # close .entry (buttons below can't live inside raw HTML)
+
     related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
     if not related.empty:
-        st.markdown('<div class="related-section">', unsafe_allow_html=True)
-        st.markdown('<div class="related-title">Related rulings</div>', unsafe_allow_html=True)
-        for _, r in related.iterrows():
-            label = str(r["tier1_class"]).replace("_", " ")
-            st.markdown(
-                f'<div class="related-item"><strong>{label}</strong> — {r["question_en"] or r["question_bn"]}</div>',
-                unsafe_allow_html=True,
-            )
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="related-heading">Related entries</div>', unsafe_allow_html=True)
+        for i, r in related.iterrows():
+            label_r = str(r["tier1_class"]).replace("_", " ")
+            display_text = r["question_en"] or r["question_bn"]
+            if st.button(f"{label_r} — {display_text}", key=f"related_{row['id']}_{i}", type="secondary"):
+                _set_pending_query(str(r["question_en"] or r["question_bn"]))
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # Details expander
-    with st.expander("🔍 View match details"):
-        stage_labels = {
-            "exact_match": "Exact/substring match",
-            "tfidf_cosine": "TF-IDF + cosine similarity",
-            "fuzzy_match": "Fuzzy text match",
-        }
-        st.write(f"**Matched via:** {stage_labels.get(result.stage, result.stage)}")
-        st.write(f"**Confidence:** {result.similarity:.2f}")
+    with st.expander("Apparatus — how this was matched"):
+        st.write(f"Matched via: {STAGE_LABELS.get(result.stage, result.stage)}")
+        st.write(f"Match confidence: {result.similarity:.2f}")
         predicted = classify_query(str(row["question_en"] or row["question_bn"]), vectorizer, classifier)
         if predicted is not None:
-            agree = "✅ agrees" if predicted == row["tier1_class"] else "❌ disagrees"
-            st.write(f"**Classifier prediction:** {predicted.replace('_', ' ')} ({agree} with retrieved row)")
+            agree = "agrees" if predicted == row["tier1_class"] else "disagrees"
+            st.write(f"Classifier's independent prediction: {predicted.replace('_', ' ')} ({agree} with the retrieved entry)")
         else:
-            st.write("**Classifier:** unavailable (insufficient training data).")
+            st.write("Classifier confirmation unavailable (not enough training data yet).")
 
 
 def render_no_match(result: RetrievalResult) -> None:
+    st.markdown('<div class="no-match-box">', unsafe_allow_html=True)
+    st.markdown('<div class="no-match-heading">No confident match in the reference set.</div>', unsafe_allow_html=True)
     st.markdown(
-        """
-        <div class="no-match-box">
-            <div class="no-match-icon">🔍</div>
-            <div class="no-match-title">No confident match found</div>
-            <div>Try a different phrasing or check the suggestions below.</div>
-        </div>
-        """,
+        '<div class="no-match-body">Try different wording, or open one of the closest entries below.</div>',
         unsafe_allow_html=True,
     )
+    st.markdown("</div>", unsafe_allow_html=True)
+
     if result.suggestions:
-        st.markdown("**Closest entries you might mean:**", unsafe_allow_html=True)
-        for r in result.suggestions:
+        st.markdown('<div class="related-heading">Closest entries</div>', unsafe_allow_html=True)
+        for i, r in enumerate(result.suggestions):
             label = str(r["tier1_class"]).replace("_", " ")
-            st.markdown(
-                f'<div class="related-item"><strong>{label}</strong> — {r["question_en"] or r["question_bn"]}</div>',
-                unsafe_allow_html=True,
-            )
+            display_text = r["question_en"] or r["question_bn"]
+            if st.button(f"{label} — {display_text}", key=f"suggestion_{i}", type="secondary"):
+                _set_pending_query(str(r["question_en"] or r["question_bn"]))
 
 
 def render_browse_mode(df: pd.DataFrame) -> None:
@@ -740,27 +739,23 @@ def render_browse_mode(df: pd.DataFrame) -> None:
     if class_filter != "All":
         filtered = filtered[filtered["tier1_class"] == class_filter]
 
-    st.markdown(f'<div class="app-subtitle">{len(filtered)} matching entries</div>', unsafe_allow_html=True)
-    for _, row in filtered.iterrows():
-        st.markdown('<div class="result-card">', unsafe_allow_html=True)
-        st.markdown(f'<div class="result-question-bn">{row["question_bn"]}</div>', unsafe_allow_html=True)
-        if str(row.get("question_en", "")).strip():
-            st.markdown(f'<div class="result-question-en">{row["question_en"]}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="browse-count">{len(filtered)} entries</div>', unsafe_allow_html=True)
 
+    for _, row in filtered.iterrows():
+        st.markdown('<div class="entry">', unsafe_allow_html=True)
+        st.markdown(f'<div class="entry-refno">Ref. No. {int(row["id"]):04d}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="entry-question">{row["question_en"] or row["question_bn"]}</div>', unsafe_allow_html=True)
         label = str(row["tier1_class"]).replace("_", " ")
         strictness = str(row.get("strictness_label", "")).strip()
-        st.markdown('<div class="badge-row">', unsafe_allow_html=True)
-        st.markdown(f'<span class="badge badge-tier">{label}</span>', unsafe_allow_html=True)
-        if strictness:
-            st.markdown(f'<span class="badge badge-strictness">{strictness}</span>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        bn_expl, en_expl = _explanation_for(row)
-        if bn_expl:
-            st.markdown(f'<div class="explanation-text explanation-bn">{bn_expl}</div>', unsafe_allow_html=True)
-        if en_expl:
-            st.markdown(f'<div class="explanation-text explanation-en">{en_expl}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        label_text = f"{label} — {strictness}" if strictness else label
+        st.markdown(
+            f'<div class="category-label"><span class="category-mark">{SECTION_MARK}</span>{label_text}</div>',
+            unsafe_allow_html=True,
+        )
+        explanation = _explanation_for(row)
+        if explanation:
+            st.markdown(f'<div class="explanation-text">{explanation}</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -771,16 +766,13 @@ def main() -> None:
     st.set_page_config(page_title="Ruling Reference", layout="centered")
     inject_css()
 
-    # Header
+    st.markdown('<div class="app-eyebrow">A reference collection of verified rulings</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-title">Ruling Reference</div>', unsafe_allow_html=True)
     st.markdown(
-        """
-        <div class="app-header">
-            <div class="app-title">Ruling<span class="app-title-accent"> Reference</span></div>
-            <div class="app-subtitle">Search Islamic rulings in Bangla, English, or Banglish.</div>
-        </div>
-        """,
+        '<div class="app-subtitle">Search in Bangla, English, or Banglish. Every entry traces to a cited source.</div>',
         unsafe_allow_html=True,
     )
+    st.markdown('<hr class="app-rule" />', unsafe_allow_html=True)
 
     try:
         df = load_dataset(DATA_PATH)
@@ -797,9 +789,11 @@ def main() -> None:
     mode = st.radio("Mode", ["Search", "Browse"], horizontal=True, label_visibility="collapsed")
 
     if mode == "Search":
+        default_query = st.session_state.pop("pending_query", "")
         query = st.text_input(
             "Search",
-            placeholder="Type a question — e.g. namaj pora ki, is riba haram, বিয়ে করা কি সুন্নত...",
+            value=default_query,
+            placeholder="namaj pora ki · is riba haram · বিয়ে করা কি সুন্নত…",
             label_visibility="collapsed",
         )
         if query.strip():
@@ -812,12 +806,8 @@ def main() -> None:
         render_browse_mode(df)
 
     st.markdown(
-        """
-        <div class="app-footer">
-            Rulings shown here are for educational reference only.<br>
-            Consult a qualified scholar for personal or complex matters.
-        </div>
-        """,
+        '<div class="app-footer">Entries here are for educational reference only. '
+        "For personal or complex matters, consult a qualified scholar.</div>",
         unsafe_allow_html=True,
     )
 
