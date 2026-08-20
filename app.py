@@ -325,24 +325,14 @@ def inject_css() -> None:
         :root {{
             --bg: #0F0F1A;
             --card: #1A1A2E;
-            --card-hover: #24243A;
             --text: #E8E8E8;
             --text-bright: #FFFFFF;
             --text-muted: #9A9AB0;
             --accent: #D4AF37;
-            --accent-hover: #C9A030;
-            --accent-soft: #2A2410;
             --hairline: #2E2E42;
-            --flag-bg: #3A2E10;
-            --flag-ink: #E0C060;
             --font-display: 'Noto Serif Bengali', Georgia, serif;
             --font-body: 'Noto Sans Bengali', 'Inter', sans-serif;
             --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-            --space-1: 0.4rem;
-            --space-2: 0.8rem;
-            --space-3: 1.4rem;
-            --space-4: 2.2rem;
-            --space-5: 3.2rem;
         }}
 
         html, body, [class*="css"] {{
@@ -351,53 +341,48 @@ def inject_css() -> None:
             font-family: var(--font-body);
         }}
 
-        .stApp {{
-            position: relative;
-        }}
-
-        .stApp::before {{
+        /* HSTU Logo as fixed background watermark - BEHIND all content */
+        body::before {{
             content: "";
             position: fixed;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            width: 420px;
-            height: 420px;
+            width: 400px;
+            height: 400px;
             background-image: url('{HSTU_LOGO_URL}');
             background-size: contain;
             background-repeat: no-repeat;
             background-position: center;
-            opacity: 0.05;
+            opacity: 0.04;
             pointer-events: none;
             z-index: 0;
         }}
 
-        .block-container {{
+        /* ALL Streamlit content must be ABOVE the watermark */
+        .stApp {{
             position: relative;
             z-index: 1;
+            background: transparent !important;
+        }}
+
+        .block-container {{
             max-width: 700px;
-            padding-top: var(--space-4);
-            padding-bottom: var(--space-5);
+            padding-top: 2.2rem;
+            padding-bottom: 3.2rem;
+            background: transparent !important;
         }}
 
         #MainMenu, header[data-testid="stHeader"], footer {{ visibility: hidden; }}
 
-        a:focus-visible, button:focus-visible, input:focus-visible {{
-            outline: 2px solid var(--accent);
-            outline-offset: 2px;
-        }}
-
-        @media (prefers-reduced-motion: reduce) {{
-            * {{ animation: none !important; transition: none !important; }}
-        }}
-
+        /* ---------- Typography ---------- */
         .app-eyebrow {{
             font-family: var(--font-mono);
             font-size: 0.72rem;
             letter-spacing: 0.22em;
             text-transform: uppercase;
             color: var(--accent) !important;
-            margin-bottom: var(--space-1);
+            margin-bottom: 0.4rem;
         }}
 
         .app-title {{
@@ -405,7 +390,7 @@ def inject_css() -> None:
             font-weight: 700;
             font-size: 2.1rem;
             color: var(--text-bright) !important;
-            margin-bottom: var(--space-1);
+            margin-bottom: 0.4rem;
             line-height: 1.15;
         }}
 
@@ -418,7 +403,7 @@ def inject_css() -> None:
         .app-rule {{
             border: none;
             border-top: 1px solid var(--hairline);
-            margin: var(--space-3) 0 var(--space-4) 0;
+            margin: 1.4rem 0 2.2rem 0;
         }}
 
         .bn-inline {{
@@ -434,6 +419,7 @@ def inject_css() -> None:
             font-size: 0.97em;
         }}
 
+        /* ---------- Search Input ---------- */
         .field-label {{
             font-family: var(--font-body);
             font-size: 0.85rem;
@@ -460,6 +446,7 @@ def inject_css() -> None:
             opacity: 0.7;
         }}
 
+        /* ---------- Buttons ---------- */
         .stButton > button {{
             background-color: var(--accent) !important;
             color: #0F0F1A !important;
@@ -469,15 +456,15 @@ def inject_css() -> None:
             font-family: var(--font-body) !important;
             font-weight: 600 !important;
             font-size: 0.88rem !important;
-            letter-spacing: 0.02em !important;
         }}
 
         .stButton > button:hover {{
-            background-color: var(--accent-hover) !important;
+            background-color: #C9A030 !important;
             color: #0F0F1A !important;
         }}
 
-        div[role="radiogroup"] {{ gap: var(--space-3); }}
+        /* ---------- Radio ---------- */
+        div[role="radiogroup"] {{ gap: 1.4rem; }}
         div[role="radiogroup"] label {{
             font-family: var(--font-mono) !important;
             font-size: 0.78rem !important;
@@ -486,6 +473,7 @@ def inject_css() -> None:
             color: var(--text-muted) !important;
         }}
 
+        /* ---------- Result Cards ---------- */
         @keyframes entryFadeIn {{
             from {{ opacity: 0; transform: translateY(4px); }}
             to {{ opacity: 1; transform: translateY(0); }}
@@ -495,8 +483,8 @@ def inject_css() -> None:
             background-color: var(--card) !important;
             border: 1px solid var(--hairline) !important;
             border-radius: 3px !important;
-            padding: var(--space-3) var(--space-3) var(--space-2) var(--space-3) !important;
-            margin-top: var(--space-3) !important;
+            padding: 1.4rem 1.4rem 0.8rem 1.4rem !important;
+            margin-top: 1.4rem !important;
             animation: entryFadeIn 220ms ease-out;
         }}
 
@@ -505,7 +493,7 @@ def inject_css() -> None:
             font-size: 0.72rem !important;
             color: var(--text-muted) !important;
             letter-spacing: 0.05em !important;
-            margin-bottom: var(--space-2) !important;
+            margin-bottom: 0.8rem !important;
         }}
 
         .entry-question {{
@@ -521,7 +509,7 @@ def inject_css() -> None:
             font-family: var(--font-body) !important;
             font-size: 0.92rem !important;
             color: var(--text-muted) !important;
-            margin-bottom: var(--space-2) !important;
+            margin-bottom: 0.8rem !important;
         }}
 
         .category-label {{
@@ -533,12 +521,12 @@ def inject_css() -> None:
             color: var(--text-bright) !important;
             border-left: 3px solid var(--accent) !important;
             padding: 0.2rem 0 0.2rem 0.65rem !important;
-            margin: var(--space-2) 0 var(--space-3) 0 !important;
+            margin: 0.8rem 0 1.4rem 0 !important;
         }}
 
         .category-mark {{ color: var(--accent) !important; margin-right: 0.4rem !important; font-weight: 400 !important; }}
 
-        .explanation-text {{ font-size: 0.99rem !important; line-height: 1.6 !important; margin-bottom: var(--space-2) !important; color: var(--text) !important; }}
+        .explanation-text {{ font-size: 0.99rem !important; line-height: 1.6 !important; margin-bottom: 0.8rem !important; color: var(--text) !important; }}
 
         .citation-block {{
             border-left: 2px solid var(--hairline) !important;
@@ -546,7 +534,7 @@ def inject_css() -> None:
             color: var(--text-muted) !important;
             font-size: 0.88rem !important;
             font-style: italic !important;
-            margin-bottom: var(--space-2) !important;
+            margin-bottom: 0.8rem !important;
         }}
 
         .citation-source {{
@@ -563,12 +551,12 @@ def inject_css() -> None:
             display: inline-block !important;
             font-family: var(--font-mono) !important;
             font-size: 0.72rem !important;
-            color: var(--flag-ink) !important;
-            background-color: var(--flag-bg) !important;
+            color: #E0C060 !important;
+            background-color: #3A2E10 !important;
             border: 1px solid #5A4A20 !important;
             border-radius: 2px !important;
             padding: 0.15rem 0.5rem !important;
-            margin-bottom: var(--space-2) !important;
+            margin-bottom: 0.8rem !important;
             letter-spacing: 0.02em !important;
         }}
 
@@ -578,17 +566,18 @@ def inject_css() -> None:
             letter-spacing: 0.14em !important;
             text-transform: uppercase !important;
             color: var(--text-muted) !important;
-            margin: var(--space-2) 0 0.35rem 0 !important;
+            margin: 0.8rem 0 0.35rem 0 !important;
             border-top: 1px solid var(--hairline) !important;
-            padding-top: var(--space-2) !important;
+            padding-top: 0.8rem !important;
         }}
 
+        /* ---------- No Match ---------- */
         .no-match-box {{
             background-color: var(--card) !important;
             border: 1px dashed var(--hairline) !important;
             border-radius: 3px !important;
-            padding: var(--space-3) !important;
-            margin-top: var(--space-3) !important;
+            padding: 1.4rem !important;
+            margin-top: 1.4rem !important;
         }}
 
         .no-match-heading {{
@@ -598,8 +587,9 @@ def inject_css() -> None:
             color: var(--text-bright) !important;
         }}
 
-        .no-match-body {{ color: var(--text-muted) !important; font-size: 0.9rem !important; margin-bottom: var(--space-2) !important; }}
+        .no-match-body {{ color: var(--text-muted) !important; font-size: 0.9rem !important; margin-bottom: 0.8rem !important; }}
 
+        /* ---------- Secondary Buttons ---------- */
         div[data-testid="stButton"] button[kind="secondary"] {{
             background-color: transparent !important;
             color: var(--text) !important;
@@ -615,21 +605,23 @@ def inject_css() -> None:
         }}
 
         div[data-testid="stButton"] button[kind="secondary"]:hover {{
-            background-color: var(--card-hover) !important;
+            background-color: #24243A !important;
             color: var(--text-bright) !important;
         }}
 
+        /* ---------- Browse ---------- */
         .browse-count {{
             font-family: var(--font-mono) !important;
             font-size: 0.78rem !important;
             color: var(--text-muted) !important;
             letter-spacing: 0.05em !important;
-            margin: var(--space-2) 0 var(--space-1) 0 !important;
+            margin: 0.8rem 0 0.4rem 0 !important;
         }}
 
+        /* ---------- Footer ---------- */
         .app-footer {{
-            margin-top: var(--space-5) !important;
-            padding-top: var(--space-2) !important;
+            margin-top: 3.2rem !important;
+            padding-top: 0.8rem !important;
             border-top: 1px solid var(--hairline) !important;
             color: var(--text-muted) !important;
             font-size: 0.8rem !important;
@@ -639,7 +631,7 @@ def inject_css() -> None:
         @media (max-width: 480px) {{
             .block-container {{ padding-left: 1.1rem !important; padding-right: 1.1rem !important; }}
             .app-title {{ font-size: 1.6rem !important; }}
-            .entry {{ padding: var(--space-2) !important; }}
+            .entry {{ padding: 0.8rem !important; }}
         }}
         </style>
         """,
