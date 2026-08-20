@@ -417,15 +417,17 @@ def inject_css() -> None:
         @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
         :root {
-            --paper: #F2ECDD;
-            --card: #FBF8EF;
-            --ink: #2B2A24;
-            --ink-muted: #544F42;   /* darkened from an earlier draft: 4.0:1 on paper failed WCAG AA; this is 6.9:1+ */
-            --accent: #2F4858;
-            --accent-soft: #E4DEC9;
-            --hairline: #DDD3B8;
-            --flag-bg: #F3E6C8;
-            --flag-ink: #6B4E1F;    /* darkened for the same reason: 6.2:1 on flag-bg */
+            --bg: #1A1A2E;
+            --card: #16213E;
+            --card-hover: #1F2E4A;
+            --text: #EAEAEA;
+            --text-bright: #FFFFFF;
+            --text-muted: #A0A0B0;
+            --accent: #D4AF37;
+            --accent-soft: #3A3520;
+            --hairline: #2A2A3E;
+            --flag-bg: #3A2E10;
+            --flag-ink: #E0C060;
             --font-display: 'Noto Serif Bengali', Georgia, serif;
             --font-body: 'Noto Sans Bengali', 'Inter', sans-serif;
             --font-mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -437,14 +439,13 @@ def inject_css() -> None:
         }
 
         html, body, [class*="css"] {
-            background-color: var(--paper) !important;
-            color: var(--ink);
+            background-color: var(--bg) !important;
+            color: var(--text);
             font-family: var(--font-body);
         }
         .block-container { max-width: 700px; padding-top: var(--space-4); padding-bottom: var(--space-5); }
         #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; }
 
-        /* Accessible focus states — never remove outline without replacing it */
         a:focus-visible, button:focus-visible, input:focus-visible {
             outline: 2px solid var(--accent);
             outline-offset: 2px;
@@ -459,20 +460,20 @@ def inject_css() -> None:
             font-size: 0.72rem;
             letter-spacing: 0.22em;
             text-transform: uppercase;
-            color: var(--ink-muted);
+            color: var(--accent);
             margin-bottom: var(--space-1);
         }
         .app-title {
             font-family: var(--font-display);
             font-weight: 700;
             font-size: 2.1rem;
-            color: var(--ink);
+            color: var(--text-bright);
             margin-bottom: var(--space-1);
             line-height: 1.15;
         }
         .app-subtitle {
             font-family: var(--font-body);
-            color: var(--ink-muted);
+            color: var(--text-muted);
             font-size: 0.95rem;
         }
         .app-rule {
@@ -482,19 +483,14 @@ def inject_css() -> None:
         }
 
         /* ---------- Bilingual text pattern ---------- */
-        /* Short labels: English + Bangla on one line, Bangla slightly muted
-           so the eye isn't asked to parse two full-weight scripts at once. */
         .bn-inline {
             font-family: var(--font-body);
-            color: var(--ink-muted);
+            color: var(--text-muted);
         }
-        /* Full sentences: English then Bangla stacked, both full-strength,
-           since a Bangla-first reader needs the second line to stand fully
-           on its own, not read as a dim footnote. */
-        .en-line { display: block; color: var(--ink); }
+        .en-line { display: block; color: var(--text); }
         .bn-line {
             display: block;
-            color: var(--ink);
+            color: var(--text-muted);
             margin-top: 0.2rem;
             font-size: 0.97em;
         }
@@ -503,14 +499,14 @@ def inject_css() -> None:
         .field-label {
             font-family: var(--font-body);
             font-size: 0.85rem;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             margin-bottom: 0.35rem;
         }
         div[data-testid="stTextInput"] input {
             background-color: var(--card);
             border: 1px solid var(--hairline);
             border-radius: 3px;
-            color: var(--ink);
+            color: var(--text-bright);
             font-size: 1.08rem;
             padding: 0.85rem 1rem;
         }
@@ -518,30 +514,29 @@ def inject_css() -> None:
             border-color: var(--accent);
             box-shadow: 0 0 0 1px var(--accent);
         }
-        div[data-testid="stTextInput"] input::placeholder { color: var(--ink-muted); opacity: 0.8; }
+        div[data-testid="stTextInput"] input::placeholder { color: var(--text-muted); opacity: 0.7; }
 
         .stButton > button {
             background-color: var(--accent);
-            color: var(--card);
+            color: #1A1A2E;
             border: none;
             border-radius: 3px;
             padding: 0.5rem 1.2rem;
             font-family: var(--font-body);
-            font-weight: 500;
+            font-weight: 600;
             font-size: 0.88rem;
             letter-spacing: 0.02em;
             transition: background-color 120ms ease;
         }
-        .stButton > button:hover { background-color: #24394A; color: var(--card); }
+        .stButton > button:hover { background-color: #C9A030; color: #1A1A2E; }
 
-        /* Mode toggle reads like a catalog tab, not a pill switch */
         div[role="radiogroup"] { gap: var(--space-3); }
         div[role="radiogroup"] label {
             font-family: var(--font-mono);
             font-size: 0.78rem;
             letter-spacing: 0.12em;
             text-transform: uppercase;
-            color: var(--ink-muted);
+            color: var(--text-muted);
         }
 
         /* ---------- Result entry ---------- */
@@ -560,7 +555,7 @@ def inject_css() -> None:
         .entry-refno {
             font-family: var(--font-mono);
             font-size: 0.72rem;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             letter-spacing: 0.05em;
             margin-bottom: var(--space-2);
         }
@@ -570,11 +565,12 @@ def inject_css() -> None:
             font-weight: 600;
             line-height: 1.4;
             margin-bottom: 0.3rem;
+            color: var(--text-bright);
         }
         .entry-question-en {
             font-family: var(--font-body);
             font-size: 0.92rem;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             margin-bottom: var(--space-2);
         }
         .category-label {
@@ -583,19 +579,19 @@ def inject_css() -> None:
             font-weight: 600;
             letter-spacing: 0.12em;
             text-transform: uppercase;
-            color: var(--ink);
+            color: var(--text-bright);
             border-left: 3px solid var(--accent);
             padding: 0.2rem 0 0.2rem 0.65rem;
             margin: var(--space-2) 0 var(--space-3) 0;
         }
         .category-mark { color: var(--accent); margin-right: 0.4rem; font-weight: 400; }
 
-        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: var(--space-2); }
+        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: var(--space-2); color: var(--text); }
 
         .citation-block {
             border-left: 2px solid var(--hairline);
             padding: 0.45rem 0 0.45rem 0.85rem;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             font-size: 0.88rem;
             font-style: italic;
             margin-bottom: var(--space-2);
@@ -605,7 +601,7 @@ def inject_css() -> None:
             font-family: var(--font-mono);
             font-style: normal;
             font-size: 0.76rem;
-            color: var(--ink-muted);
+            color: var(--accent);
             margin-top: 0.25rem;
             letter-spacing: 0.02em;
         }
@@ -616,7 +612,7 @@ def inject_css() -> None:
             font-size: 0.72rem;
             color: var(--flag-ink);
             background-color: var(--flag-bg);
-            border: 1px solid #E0CD9C;
+            border: 1px solid #5A4A20;
             border-radius: 2px;
             padding: 0.15rem 0.5rem;
             margin-bottom: var(--space-2);
@@ -628,7 +624,7 @@ def inject_css() -> None:
             font-size: 0.72rem;
             letter-spacing: 0.14em;
             text-transform: uppercase;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             margin: var(--space-2) 0 0.35rem 0;
             border-top: 1px solid var(--hairline);
             padding-top: var(--space-2);
@@ -646,13 +642,14 @@ def inject_css() -> None:
             font-family: var(--font-display);
             font-size: 1.05rem;
             margin-bottom: 0.3rem;
+            color: var(--text-bright);
         }
-        .no-match-body { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
+        .no-match-body { color: var(--text-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
 
         /* ---------- Clickable list rows (related rulings / suggestions) ---------- */
         div[data-testid="stButton"] button[kind="secondary"] {
             background-color: transparent;
-            color: var(--ink);
+            color: var(--text);
             border: none;
             border-bottom: 1px solid var(--hairline);
             border-radius: 0;
@@ -664,15 +661,15 @@ def inject_css() -> None:
             font-size: 0.92rem;
         }
         div[data-testid="stButton"] button[kind="secondary"]:hover {
-            background-color: var(--accent-soft);
-            color: var(--ink);
+            background-color: var(--card-hover);
+            color: var(--text-bright);
         }
 
         /* ---------- Browse mode ---------- */
         .browse-count {
             font-family: var(--font-mono);
             font-size: 0.78rem;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             letter-spacing: 0.05em;
             margin: var(--space-2) 0 var(--space-1) 0;
         }
@@ -682,7 +679,7 @@ def inject_css() -> None:
             margin-top: var(--space-5);
             padding-top: var(--space-2);
             border-top: 1px solid var(--hairline);
-            color: var(--ink-muted);
+            color: var(--text-muted);
             font-size: 0.8rem;
             line-height: 1.5;
         }
