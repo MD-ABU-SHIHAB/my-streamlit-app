@@ -35,14 +35,16 @@ from sklearn.metrics.pairwise import cosine_similarity
 # --------------------------------------------------------------------------- #
 
 DATA_PATH: str = "dataset.csv"
-RANDOM_STATE: int = 42
+RANDOM_STATE: int = 42  # matches main.py, for consistent classifier behavior
 
-TFIDF_SIMILARITY_THRESHOLD: float = 0.30
-FUZZY_MATCH_THRESHOLD: float = 0.55
-TOP_K_SUGGESTIONS: int = 5
-TOP_K_RELATED: int = 4
-MIN_QUERY_LEN_FOR_EXACT: int = 2
-MEANINGFUL_TOKEN_MIN_LEN: int = 3
+# Retrieval pipeline thresholds. Named and commented so they're easy to tune
+# from one place as the dataset grows.
+TFIDF_SIMILARITY_THRESHOLD: float = 0.30   # min cosine similarity to accept a TF-IDF match
+FUZZY_MATCH_THRESHOLD: float = 0.55        # min difflib ratio to accept a fuzzy match
+TOP_K_SUGGESTIONS: int = 5                 # suggestions shown in the no-match state
+TOP_K_RELATED: int = 4                     # related rulings shown under a confident match
+MIN_QUERY_LEN_FOR_EXACT: int = 2           # ignore exact-match stage for near-empty queries
+MEANINGFUL_TOKEN_MIN_LEN: int = 3          # ignore short/particle-like tokens ("is", "কি") for exact matching
 
 REQUIRED_COLUMNS = [
     "id", "question_bn", "question_en", "question_banglish", "tier1_class",
@@ -51,6 +53,19 @@ REQUIRED_COLUMNS = [
     "search_keywords",
 ]
 
+TIER1_CLASSES = [
+    "Obligatory", "Recommended", "Permissible", "Disliked",
+    "Forbidden", "Religious_Innovation", "Faith_Violation",
+]
+
+TOPICS = [
+    "Worship", "Food_and_Drink", "Family_and_Marriage", "Business_and_Finance",
+    "Purity", "Social_Conduct", "Clothing_and_Adornment", "Faith_and_Aqidah",
+    "Funeral_and_Mourning", "Oaths_and_Vows",
+]
+
+# Same explicit Bangla stopword list as main.py, kept identical on purpose so
+# app.py's live preprocessing matches the offline report's preprocessing exactly.
 BANGLA_STOPWORDS = {
     "কি", "কী", "না", "নাই", "কি না", "এবং", "ও", "তে", "এর", "এই",
     "সেই", "একটি", "একটা", "কে", "কাকে", "কোন", "কোনো", "যে", "যেটা",
@@ -70,8 +85,11 @@ ENGLISH_STOPWORDS = {
 
 NEEDS_VERIFICATION_LABEL = "NEEDS_VERIFICATION"
 PLACEHOLDER_REFERENCE_TEXT = "SEE_REFERENCE_SOURCE"
+
+# Real Qur'anic section-divider glyph (rub' el hizb), used as the result
+# marker. Not a decorative emoji — it is the actual mark used in printed
+# Mus'haf pages to divide sections, which is why it belongs here.
 SECTION_MARK = "\u06de"  # ۞
-HSTU_LOGO_URL = "https://hstu.ac.bd/img/hstu_logo_.png"
 
 STAGE_LABELS = {
     "exact_match": ("Exact match", "সরাসরি মিল"),
@@ -79,6 +97,11 @@ STAGE_LABELS = {
     "fuzzy_match": ("Approximate match", "আনুমানিক মিল"),
 }
 
+# Most users of this app read Bangla first — every English UI string ships
+# with a Bangla counterpart. These two maps translate the fixed category
+# vocabulary (which the dataset stores in English, since it's the ML
+# classification target) for display only; they never touch the underlying
+# tier1_class/topic values used for matching or classification.
 TIER1_CLASS_BN = {
     "Obligatory": "আবশ্যক",
     "Recommended": "সুপারিশকৃত",
@@ -104,14 +127,18 @@ TOPIC_BN = {
 
 
 def bilingual(en: str, bn: str) -> str:
+    """Compact inline pairing for short labels: 'English · বাংলা'."""
     return f"{en} <span class='bn-inline'>· {bn}</span>"
 
 
 def bilingual_plain(en: str, bn: str) -> str:
+    """Plain-text pairing for widget labels that don't render HTML (e.g. st.expander)."""
     return f"{en} · {bn}"
 
 
 def bilingual_block(en: str, bn: str) -> str:
+    """Stacked pairing for full sentences — English line, Bangla line below,
+    each fully legible on its own rather than interleaved mid-sentence."""
     return f'<span class="en-line">{en}</span><span class="bn-line">{bn}</span>'
 
 
@@ -122,26 +149,29 @@ def bilingual_block(en: str, bn: str) -> str:
 @dataclass
 class RetrievalResult:
     row: Optional[pd.Series]
-    stage: str
-    similarity: float
-    suggestions: list = field(default_factory=list)
+    stage: str                    # "exact_match" | "tfidf_cosine" | "fuzzy_match" | "no_match"
+    similarity: float              # 0..1, meaning depends on stage
+    suggestions: list = field(default_factory=list)  # list of pd.Series, used when stage == "no_match"
 
 
 # --------------------------------------------------------------------------- #
-# LOADING & PREPROCESSING
+# LOADING & PREPROCESSING (kept identical in approach to main.py)
 # --------------------------------------------------------------------------- #
 
 class DatasetError(Exception):
-    pass
+    """Raised for any dataset load/shape problem, so main() can show a clean message."""
 
 
 @st.cache_data(show_spinner=False)
 def load_dataset(path: str) -> pd.DataFrame:
+    """Load dataset.csv and validate it has the columns this app needs."""
     try:
         df = pd.read_csv(path)
     except FileNotFoundError:
-        raise DatasetError(f"Couldn't find '{path}'. Place dataset.csv in the same folder as app.py.")
-    except Exception as exc:
+        raise DatasetError(
+            f"Couldn't find '{path}'. Place dataset.csv in the same folder as app.py."
+        )
+    except Exception as exc:  # malformed CSV, encoding issues, etc.
         raise DatasetError(f"Couldn't read '{path}': {exc}")
 
     if df.empty:
@@ -149,16 +179,21 @@ def load_dataset(path: str) -> pd.DataFrame:
 
     missing_cols = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing_cols:
-        raise DatasetError("dataset.csv is missing required column(s): " + ", ".join(missing_cols))
+        raise DatasetError(
+            "dataset.csv is missing required column(s): " + ", ".join(missing_cols)
+        )
 
     critical = ["question_bn", "tier1_class"]
     df = df.dropna(subset=critical).reset_index(drop=True)
     if df.empty:
-        raise DatasetError("Every row is missing question_bn and/or tier1_class — nothing to search.")
+        raise DatasetError(
+            "Every row is missing question_bn and/or tier1_class — nothing to search."
+        )
     return df
 
 
 def clean_text(text: str) -> str:
+    """Lowercase, strip punctuation, remove Bangla+English stopwords. Matches main.py."""
     if not isinstance(text, str):
         return ""
     text = text.lower()
@@ -170,16 +205,35 @@ def clean_text(text: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def build_combined_text(df: pd.DataFrame) -> pd.DataFrame:
+    """Combine question_bn + question_en + search_keywords, same field construction as main.py."""
     df = df.copy()
     for col in ("question_bn", "question_en", "question_banglish", "search_keywords"):
         df[col] = df[col].fillna("")
-    df["combined_text_raw"] = df["question_bn"] + " " + df["question_en"] + " " + df["search_keywords"]
+    df["combined_text_raw"] = (
+        df["question_bn"] + " " + df["question_en"] + " " + df["search_keywords"]
+    )
     df["combined_text_clean"] = df["combined_text_raw"].apply(clean_text)
     return df
 
 
 @st.cache_data(show_spinner=False)
 def build_banglish_map(df: pd.DataFrame) -> dict[str, set[str]]:
+    """Build an extendable synonym map from the dataset's own search_keywords.
+
+    For every row, its search_keywords terms are treated as one synonym
+    group — any term in the group maps to every other term in that group.
+    This lets a user's query in one spelling ("namaz") pull in the dataset's
+    other spellings of the same concept ("namaj", "salah", ...) at query
+    time, without hardcoding any per-question logic: new rows automatically
+    extend the map.
+
+    Only search_keywords is used (not question_banglish) deliberately:
+    search_keywords is a deliberately curated synonym list, whereas
+    question_banglish is a full sentence containing generic connector words
+    ("ki", "kora", "deya"...) that recur across almost every row. Grouping
+    on those connector words would transitively merge unrelated rows'
+    synonym groups into one another.
+    """
     banglish_map: dict[str, set[str]] = {}
     for _, row in df.iterrows():
         group_terms = set()
@@ -193,6 +247,7 @@ def build_banglish_map(df: pd.DataFrame) -> dict[str, set[str]]:
 
 
 def normalize_query(query: str, banglish_map: dict[str, set[str]]) -> str:
+    """Expand a raw query with known synonym terms, for use only inside retrieval (never shown to the user)."""
     query_lower = query.lower().strip()
     tokens = re.findall(r"[\w\u0980-\u09FF]+", query_lower)
     expanded = set(tokens)
@@ -203,14 +258,25 @@ def normalize_query(query: str, banglish_map: dict[str, set[str]]) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# CLASSIFIER
+# CLASSIFIER (secondary confirmation signal only — never the primary answer)
 # --------------------------------------------------------------------------- #
 
 @st.cache_resource(show_spinner="Indexing the reference set…")
 def train_classifier(df: pd.DataFrame):
+    """Fit the TF-IDF vectorizer + Logistic Regression once at startup.
+
+    Character n-grams (matching main.py's choice) handle Bangla's suffix-heavy
+    morphology and Bangla/Banglish spelling variation better than word-level
+    tokens on this dataset. Logistic Regression is used at runtime (rather
+    than the other 4 models compared in main.py) because main.py's
+    bias-variance analysis identified it as the most stable generalizer
+    across cross-validation folds — not necessarily the single highest
+    accuracy on one split, but the most reliable choice for a live app.
+    """
     df = build_combined_text(df)
     vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=1, max_features=20000)
     X = vectorizer.fit_transform(df["combined_text_clean"])
+
     y = df["tier1_class"]
     classifier: Optional[LogisticRegression] = None
     if y.nunique() >= 2 and y.value_counts().min() >= 1:
@@ -224,10 +290,20 @@ def train_classifier(df: pd.DataFrame):
 # --------------------------------------------------------------------------- #
 
 def _tokenize(text: str) -> set[str]:
+    """Word-level tokens (Bangla + Latin), not substrings — avoids "is" matching inside "wearing"."""
     return set(re.findall(r"[\w\u0980-\u09FF]+", text.lower()))
 
 
 def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame) -> Optional[pd.Series]:
+    """Stage a: exact/substring match against the question & keyword fields.
+
+    Two sub-checks, both intentionally strict to avoid false positives from
+    short common words:
+      1. The full raw query appears verbatim as a substring somewhere.
+      2. Every "meaningful" query token (length >= MEANINGFUL_TOKEN_MIN_LEN,
+         after expanding through the synonym map) is found as a whole word
+         in the same row — not just any single generic word in common.
+    """
     query_norm = query.lower().strip()
     search_cols = ["question_bn", "question_en", "question_banglish", "search_keywords"]
     lowered = {c: df[c].fillna("").str.lower() for c in search_cols}
@@ -244,7 +320,9 @@ def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame
         return None
     expanded_str = normalize_query(query, banglish_map)
     expanded = {t for t in _tokenize(expanded_str) if len(t) >= MEANINGFUL_TOKEN_MIN_LEN}
+
     required_hits = len(meaningful) if len(meaningful) <= 2 else max(2, -(-len(meaningful) * 6 // 10))
+
     field_tokens = df[search_cols].fillna("").agg(" ".join, axis=1).apply(_tokenize)
     hit_counts = field_tokens.apply(lambda toks: len(toks & expanded))
     if hit_counts.max() >= required_hits:
@@ -253,6 +331,7 @@ def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame
 
 
 def _tfidf_match(query_clean: str, df: pd.DataFrame, vectorizer, X) -> tuple[Optional[pd.Series], float]:
+    """Stage b: TF-IDF + cosine similarity."""
     if not query_clean.strip():
         return None, 0.0
     q_vec = vectorizer.transform([query_clean])
@@ -265,6 +344,7 @@ def _tfidf_match(query_clean: str, df: pd.DataFrame, vectorizer, X) -> tuple[Opt
 
 
 def _fuzzy_match(query_clean: str, df: pd.DataFrame) -> tuple[Optional[pd.Series], float]:
+    """Stage c: difflib fuzzy match, as a last resort before giving up."""
     if not query_clean.strip():
         return None, 0.0
     texts = df["combined_text_clean"].tolist()
@@ -278,7 +358,10 @@ def _fuzzy_match(query_clean: str, df: pd.DataFrame) -> tuple[Optional[pd.Series
     return None, best_ratio
 
 
-def retrieve_candidates(query: str, df: pd.DataFrame, vectorizer, X, banglish_map: dict[str, set[str]]) -> RetrievalResult:
+def retrieve_candidates(
+    query: str, df: pd.DataFrame, vectorizer, X, banglish_map: dict[str, set[str]]
+) -> RetrievalResult:
+    """Run the full retrieval pipeline, stopping at the first confident stage."""
     query_clean = clean_text(query)
 
     row = _exact_match(query, banglish_map, df)
@@ -303,6 +386,7 @@ def retrieve_candidates(query: str, df: pd.DataFrame, vectorizer, X, banglish_ma
 
 
 def classify_query(query: str, vectorizer, classifier) -> Optional[str]:
+    """Secondary confirmation signal only — the predicted class, never shown as the primary answer."""
     if classifier is None:
         return None
     q_clean = clean_text(query)
@@ -314,325 +398,300 @@ def classify_query(query: str, vectorizer, classifier) -> Optional[str]:
 
 # --------------------------------------------------------------------------- #
 # UI — DESIGN TOKENS & STYLE
+#
+# Direction: a hushed reading-room / critical-edition aesthetic. The subject
+# is a reference library of verified rulings, so retrieval metadata (match
+# stage, score, classifier agreement) is treated like a scholarly edition's
+# critical apparatus — small, typographic, in the margin — rather than a
+# dashboard with progress bars. Category identity is a single accent color
+# plus label text, never a badge palette per category. The one deliberate
+# "signature" touch is the rub' el hizb mark (۞) — the real section-divider
+# glyph used in printed Qur'an pages — and a catalog-style reference number
+# on each entry, both grounded in the subject rather than decorative.
 # --------------------------------------------------------------------------- #
 
 def inject_css() -> None:
     st.markdown(
-        f"""
+        """
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
-        :root {{
-            --bg: #0F0F1A;
-            --card: #1A1A2E;
-            --text: #E8E8E8;
-            --text-bright: #FFFFFF;
-            --text-muted: #9A9AB0;
-            --accent: #D4AF37;
-            --hairline: #2E2E42;
+        :root {
+            --paper: #F2ECDD;
+            --card: #FBF8EF;
+            --ink: #2B2A24;
+            --ink-muted: #544F42;   /* darkened from an earlier draft: 4.0:1 on paper failed WCAG AA; this is 6.9:1+ */
+            --accent: #2F4858;
+            --accent-soft: #E4DEC9;
+            --hairline: #DDD3B8;
+            --flag-bg: #F3E6C8;
+            --flag-ink: #6B4E1F;    /* darkened for the same reason: 6.2:1 on flag-bg */
             --font-display: 'Noto Serif Bengali', Georgia, serif;
             --font-body: 'Noto Sans Bengali', 'Inter', sans-serif;
             --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-        }}
+            --space-1: 0.4rem;
+            --space-2: 0.8rem;
+            --space-3: 1.4rem;
+            --space-4: 2.2rem;
+            --space-5: 3.2rem;
+        }
 
-        html, body, [class*="css"] {{
-            background-color: var(--bg) !important;
-            color: var(--text) !important;
+        html, body, [class*="css"] {
+            background-color: var(--paper) !important;
+            color: var(--ink);
             font-family: var(--font-body);
-        }}
+        }
+        .block-container { max-width: 700px; padding-top: var(--space-4); padding-bottom: var(--space-5); }
+        #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; }
 
-        /* HSTU Logo as fixed background watermark - BEHIND all content */
-        body::before {{
-            content: "";
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 400px;
-            height: 400px;
-            background-image: url('{HSTU_LOGO_URL}');
-            background-size: contain;
-            background-repeat: no-repeat;
-            background-position: center;
-            opacity: 0.04;
-            pointer-events: none;
-            z-index: 0;
-        }}
+        /* Accessible focus states — never remove outline without replacing it */
+        a:focus-visible, button:focus-visible, input:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { animation: none !important; transition: none !important; }
+        }
 
-        /* ALL Streamlit content must be ABOVE the watermark */
-        .stApp {{
-            position: relative;
-            z-index: 1;
-            background: transparent !important;
-        }}
-
-        .block-container {{
-            max-width: 700px;
-            padding-top: 2.2rem;
-            padding-bottom: 3.2rem;
-            background: transparent !important;
-        }}
-
-        #MainMenu, header[data-testid="stHeader"], footer {{ visibility: hidden; }}
-
-        /* ---------- Typography ---------- */
-        .app-eyebrow {{
+        /* ---------- Header ---------- */
+        .app-eyebrow {
             font-family: var(--font-mono);
             font-size: 0.72rem;
             letter-spacing: 0.22em;
             text-transform: uppercase;
-            color: var(--accent) !important;
-            margin-bottom: 0.4rem;
-        }}
-
-        .app-title {{
+            color: var(--ink-muted);
+            margin-bottom: var(--space-1);
+        }
+        .app-title {
             font-family: var(--font-display);
             font-weight: 700;
             font-size: 2.1rem;
-            color: var(--text-bright) !important;
-            margin-bottom: 0.4rem;
+            color: var(--ink);
+            margin-bottom: var(--space-1);
             line-height: 1.15;
-        }}
-
-        .app-subtitle {{
+        }
+        .app-subtitle {
             font-family: var(--font-body);
-            color: var(--text-muted) !important;
+            color: var(--ink-muted);
             font-size: 0.95rem;
-        }}
-
-        .app-rule {{
+        }
+        .app-rule {
             border: none;
             border-top: 1px solid var(--hairline);
-            margin: 1.4rem 0 2.2rem 0;
-        }}
+            margin: var(--space-3) 0 var(--space-4) 0;
+        }
 
-        .bn-inline {{
+        /* ---------- Bilingual text pattern ---------- */
+        /* Short labels: English + Bangla on one line, Bangla slightly muted
+           so the eye isn't asked to parse two full-weight scripts at once. */
+        .bn-inline {
             font-family: var(--font-body);
-            color: var(--text-muted) !important;
-        }}
-
-        .en-line {{ display: block; color: var(--text) !important; }}
-        .bn-line {{
+            color: var(--ink-muted);
+        }
+        /* Full sentences: English then Bangla stacked, both full-strength,
+           since a Bangla-first reader needs the second line to stand fully
+           on its own, not read as a dim footnote. */
+        .en-line { display: block; color: var(--ink); }
+        .bn-line {
             display: block;
-            color: var(--text-muted) !important;
+            color: var(--ink);
             margin-top: 0.2rem;
             font-size: 0.97em;
-        }}
+        }
 
-        /* ---------- Search Input ---------- */
-        .field-label {{
+        /* ---------- Search ---------- */
+        .field-label {
             font-family: var(--font-body);
             font-size: 0.85rem;
-            color: var(--text-muted) !important;
+            color: var(--ink-muted);
             margin-bottom: 0.35rem;
-        }}
+        }
+        div[data-testid="stTextInput"] input {
+            background-color: var(--card);
+            border: 1px solid var(--hairline);
+            border-radius: 3px;
+            color: var(--ink);
+            font-size: 1.08rem;
+            padding: 0.85rem 1rem;
+        }
+        div[data-testid="stTextInput"] input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent);
+        }
+        div[data-testid="stTextInput"] input::placeholder { color: var(--ink-muted); opacity: 0.8; }
 
-        div[data-testid="stTextInput"] input {{
-            background-color: var(--card) !important;
-            border: 1px solid var(--hairline) !important;
-            border-radius: 3px !important;
-            color: var(--text-bright) !important;
-            font-size: 1.08rem !important;
-            padding: 0.85rem 1rem !important;
-        }}
+        .stButton > button {
+            background-color: var(--accent);
+            color: var(--card);
+            border: none;
+            border-radius: 3px;
+            padding: 0.5rem 1.2rem;
+            font-family: var(--font-body);
+            font-weight: 500;
+            font-size: 0.88rem;
+            letter-spacing: 0.02em;
+            transition: background-color 120ms ease;
+        }
+        .stButton > button:hover { background-color: #24394A; color: var(--card); }
 
-        div[data-testid="stTextInput"] input:focus {{
-            border-color: var(--accent) !important;
-            box-shadow: 0 0 0 1px var(--accent) !important;
-        }}
+        /* Mode toggle reads like a catalog tab, not a pill switch */
+        div[role="radiogroup"] { gap: var(--space-3); }
+        div[role="radiogroup"] label {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+        }
 
-        div[data-testid="stTextInput"] input::placeholder {{
-            color: var(--text-muted) !important;
-            opacity: 0.7;
-        }}
-
-        /* ---------- Buttons ---------- */
-        .stButton > button {{
-            background-color: var(--accent) !important;
-            color: #0F0F1A !important;
-            border: none !important;
-            border-radius: 3px !important;
-            padding: 0.5rem 1.2rem !important;
-            font-family: var(--font-body) !important;
-            font-weight: 600 !important;
-            font-size: 0.88rem !important;
-        }}
-
-        .stButton > button:hover {{
-            background-color: #C9A030 !important;
-            color: #0F0F1A !important;
-        }}
-
-        /* ---------- Radio ---------- */
-        div[role="radiogroup"] {{ gap: 1.4rem; }}
-        div[role="radiogroup"] label {{
-            font-family: var(--font-mono) !important;
-            font-size: 0.78rem !important;
-            letter-spacing: 0.12em !important;
-            text-transform: uppercase !important;
-            color: var(--text-muted) !important;
-        }}
-
-        /* ---------- Result Cards ---------- */
-        @keyframes entryFadeIn {{
-            from {{ opacity: 0; transform: translateY(4px); }}
-            to {{ opacity: 1; transform: translateY(0); }}
-        }}
-
-        .entry {{
-            background-color: var(--card) !important;
-            border: 1px solid var(--hairline) !important;
-            border-radius: 3px !important;
-            padding: 1.4rem 1.4rem 0.8rem 1.4rem !important;
-            margin-top: 1.4rem !important;
+        /* ---------- Result entry ---------- */
+        @keyframes entryFadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .entry {
+            background-color: var(--card);
+            border: 1px solid var(--hairline);
+            border-radius: 3px;
+            padding: var(--space-3) var(--space-3) var(--space-2) var(--space-3);
+            margin-top: var(--space-3);
             animation: entryFadeIn 220ms ease-out;
-        }}
+        }
+        .entry-refno {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--ink-muted);
+            letter-spacing: 0.05em;
+            margin-bottom: var(--space-2);
+        }
+        .entry-question {
+            font-family: var(--font-display);
+            font-size: 1.2rem;
+            font-weight: 600;
+            line-height: 1.4;
+            margin-bottom: 0.3rem;
+        }
+        .entry-question-en {
+            font-family: var(--font-body);
+            font-size: 0.92rem;
+            color: var(--ink-muted);
+            margin-bottom: var(--space-2);
+        }
+        .category-label {
+            font-family: var(--font-body);
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--ink);
+            border-left: 3px solid var(--accent);
+            padding: 0.2rem 0 0.2rem 0.65rem;
+            margin: var(--space-2) 0 var(--space-3) 0;
+        }
+        .category-mark { color: var(--accent); margin-right: 0.4rem; font-weight: 400; }
 
-        .entry-refno {{
-            font-family: var(--font-mono) !important;
-            font-size: 0.72rem !important;
-            color: var(--text-muted) !important;
-            letter-spacing: 0.05em !important;
-            margin-bottom: 0.8rem !important;
-        }}
+        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: var(--space-2); }
 
-        .entry-question {{
-            font-family: var(--font-display) !important;
-            font-size: 1.2rem !important;
-            font-weight: 600 !important;
-            line-height: 1.4 !important;
-            margin-bottom: 0.3rem !important;
-            color: var(--text-bright) !important;
-        }}
+        .citation-block {
+            border-left: 2px solid var(--hairline);
+            padding: 0.45rem 0 0.45rem 0.85rem;
+            color: var(--ink-muted);
+            font-size: 0.88rem;
+            font-style: italic;
+            margin-bottom: var(--space-2);
+        }
+        .citation-source {
+            display: block;
+            font-family: var(--font-mono);
+            font-style: normal;
+            font-size: 0.76rem;
+            color: var(--ink-muted);
+            margin-top: 0.25rem;
+            letter-spacing: 0.02em;
+        }
 
-        .entry-question-en {{
-            font-family: var(--font-body) !important;
-            font-size: 0.92rem !important;
-            color: var(--text-muted) !important;
-            margin-bottom: 0.8rem !important;
-        }}
+        .verification-flag {
+            display: inline-block;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--flag-ink);
+            background-color: var(--flag-bg);
+            border: 1px solid #E0CD9C;
+            border-radius: 2px;
+            padding: 0.15rem 0.5rem;
+            margin-bottom: var(--space-2);
+            letter-spacing: 0.02em;
+        }
 
-        .category-label {{
-            font-family: var(--font-body) !important;
-            font-size: 0.8rem !important;
-            font-weight: 600 !important;
-            letter-spacing: 0.12em !important;
-            text-transform: uppercase !important;
-            color: var(--text-bright) !important;
-            border-left: 3px solid var(--accent) !important;
-            padding: 0.2rem 0 0.2rem 0.65rem !important;
-            margin: 0.8rem 0 1.4rem 0 !important;
-        }}
+        .related-heading {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+            margin: var(--space-2) 0 0.35rem 0;
+            border-top: 1px solid var(--hairline);
+            padding-top: var(--space-2);
+        }
 
-        .category-mark {{ color: var(--accent) !important; margin-right: 0.4rem !important; font-weight: 400 !important; }}
+        /* ---------- No-match state ---------- */
+        .no-match-box {
+            background-color: var(--card);
+            border: 1px dashed var(--hairline);
+            border-radius: 3px;
+            padding: var(--space-3);
+            margin-top: var(--space-3);
+        }
+        .no-match-heading {
+            font-family: var(--font-display);
+            font-size: 1.05rem;
+            margin-bottom: 0.3rem;
+        }
+        .no-match-body { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
 
-        .explanation-text {{ font-size: 0.99rem !important; line-height: 1.6 !important; margin-bottom: 0.8rem !important; color: var(--text) !important; }}
+        /* ---------- Clickable list rows (related rulings / suggestions) ---------- */
+        div[data-testid="stButton"] button[kind="secondary"] {
+            background-color: transparent;
+            color: var(--ink);
+            border: none;
+            border-bottom: 1px solid var(--hairline);
+            border-radius: 0;
+            text-align: left;
+            width: 100%;
+            padding: 0.55rem 0.1rem;
+            font-family: var(--font-body);
+            font-weight: 400;
+            font-size: 0.92rem;
+        }
+        div[data-testid="stButton"] button[kind="secondary"]:hover {
+            background-color: var(--accent-soft);
+            color: var(--ink);
+        }
 
-        .citation-block {{
-            border-left: 2px solid var(--hairline) !important;
-            padding: 0.45rem 0 0.45rem 0.85rem !important;
-            color: var(--text-muted) !important;
-            font-size: 0.88rem !important;
-            font-style: italic !important;
-            margin-bottom: 0.8rem !important;
-        }}
-
-        .citation-source {{
-            display: block !important;
-            font-family: var(--font-mono) !important;
-            font-style: normal !important;
-            font-size: 0.76rem !important;
-            color: var(--accent) !important;
-            margin-top: 0.25rem !important;
-            letter-spacing: 0.02em !important;
-        }}
-
-        .verification-flag {{
-            display: inline-block !important;
-            font-family: var(--font-mono) !important;
-            font-size: 0.72rem !important;
-            color: #E0C060 !important;
-            background-color: #3A2E10 !important;
-            border: 1px solid #5A4A20 !important;
-            border-radius: 2px !important;
-            padding: 0.15rem 0.5rem !important;
-            margin-bottom: 0.8rem !important;
-            letter-spacing: 0.02em !important;
-        }}
-
-        .related-heading {{
-            font-family: var(--font-mono) !important;
-            font-size: 0.72rem !important;
-            letter-spacing: 0.14em !important;
-            text-transform: uppercase !important;
-            color: var(--text-muted) !important;
-            margin: 0.8rem 0 0.35rem 0 !important;
-            border-top: 1px solid var(--hairline) !important;
-            padding-top: 0.8rem !important;
-        }}
-
-        /* ---------- No Match ---------- */
-        .no-match-box {{
-            background-color: var(--card) !important;
-            border: 1px dashed var(--hairline) !important;
-            border-radius: 3px !important;
-            padding: 1.4rem !important;
-            margin-top: 1.4rem !important;
-        }}
-
-        .no-match-heading {{
-            font-family: var(--font-display) !important;
-            font-size: 1.05rem !important;
-            margin-bottom: 0.3rem !important;
-            color: var(--text-bright) !important;
-        }}
-
-        .no-match-body {{ color: var(--text-muted) !important; font-size: 0.9rem !important; margin-bottom: 0.8rem !important; }}
-
-        /* ---------- Secondary Buttons ---------- */
-        div[data-testid="stButton"] button[kind="secondary"] {{
-            background-color: transparent !important;
-            color: var(--text) !important;
-            border: none !important;
-            border-bottom: 1px solid var(--hairline) !important;
-            border-radius: 0 !important;
-            text-align: left !important;
-            width: 100% !important;
-            padding: 0.55rem 0.1rem !important;
-            font-family: var(--font-body) !important;
-            font-weight: 400 !important;
-            font-size: 0.92rem !important;
-        }}
-
-        div[data-testid="stButton"] button[kind="secondary"]:hover {{
-            background-color: #24243A !important;
-            color: var(--text-bright) !important;
-        }}
-
-        /* ---------- Browse ---------- */
-        .browse-count {{
-            font-family: var(--font-mono) !important;
-            font-size: 0.78rem !important;
-            color: var(--text-muted) !important;
-            letter-spacing: 0.05em !important;
-            margin: 0.8rem 0 0.4rem 0 !important;
-        }}
+        /* ---------- Browse mode ---------- */
+        .browse-count {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--ink-muted);
+            letter-spacing: 0.05em;
+            margin: var(--space-2) 0 var(--space-1) 0;
+        }
 
         /* ---------- Footer ---------- */
-        .app-footer {{
-            margin-top: 3.2rem !important;
-            padding-top: 0.8rem !important;
-            border-top: 1px solid var(--hairline) !important;
-            color: var(--text-muted) !important;
-            font-size: 0.8rem !important;
-            line-height: 1.5 !important;
-        }}
+        .app-footer {
+            margin-top: var(--space-5);
+            padding-top: var(--space-2);
+            border-top: 1px solid var(--hairline);
+            color: var(--ink-muted);
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
 
-        @media (max-width: 480px) {{
-            .block-container {{ padding-left: 1.1rem !important; padding-right: 1.1rem !important; }}
-            .app-title {{ font-size: 1.6rem !important; }}
-            .entry {{ padding: 0.8rem !important; }}
-        }}
+        @media (max-width: 480px) {
+            .block-container { padding-left: 1.1rem; padding-right: 1.1rem; }
+            .app-title { font-size: 1.6rem; }
+            .entry { padding: var(--space-2); }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -653,6 +712,7 @@ def _explanation_for(row: pd.Series) -> str:
 
 
 def _set_pending_query(text: str) -> None:
+    """Route a click on a related/suggested entry back into the search box."""
     st.session_state["pending_query"] = text
     st.rerun()
 
@@ -660,6 +720,7 @@ def _set_pending_query(text: str) -> None:
 def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classifier) -> None:
     row = result.row
     st.markdown('<div class="entry">', unsafe_allow_html=True)
+
     st.markdown(f'<div class="entry-refno">Ref. No. {int(row["id"]):04d}</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="entry-question">{row["question_bn"]}</div>', unsafe_allow_html=True)
     if str(row.get("question_en", "")).strip():
@@ -696,7 +757,7 @@ def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classif
     else:
         st.markdown(f'<div class="citation-block"><span class="citation-source">{ref_source}</span></div>', unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)  # close .entry (buttons below can't live inside raw HTML)
 
     related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
     if not related.empty:
@@ -830,7 +891,7 @@ def main() -> None:
     except DatasetError as exc:
         st.error(str(exc))
         st.stop()
-    except Exception as exc:
+    except Exception as exc:  # last-resort guard: never show a raw traceback
         st.error(f"The app couldn't start up: {exc}")
         st.stop()
 
