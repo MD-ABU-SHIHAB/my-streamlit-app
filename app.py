@@ -1,16 +1,6 @@
-
-### Model Selection
-- **AIC**: `-2·log(L) + 2k`
-- **BIC**: `-2·log(L) + k·log(n)`
-- **Grid Search**: Exhaustive parameter search
-- **Random Search**: Random parameter sampling
 """)
 
-# ====================================================================
-# SECTION 6: THIS PROJECT'S IMPLEMENTATION
-# ====================================================================
-st.markdown("## 🎯 6. This Project's Implementation")
-
+# Show actual model performance
 try:
 y_true = le.inverse_transform(classifier.classes_)
 y_pred = le.inverse_transform(classifier.predict(X))
@@ -22,7 +12,6 @@ col2.metric("Classes", len(TIER1_CLASSES))
 col3.metric("Samples", len(df))
 col4.metric("Features", X.shape[1])
 
-# Per-class metrics
 st.markdown("### Per-Class Performance")
 report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
 report_df = pd.DataFrame(report).transpose().round(3)
@@ -36,117 +25,17 @@ st.plotly_chart(fig, use_container_width=True)
 cv_scores = cross_val_score(classifier, X, le.transform(y_true), cv=5)
 st.markdown(f"**5-Fold Cross-Validation**: {cv_scores.mean():.1%} ± {cv_scores.std():.1%}")
 
-# Feature importance (top 20)
-if hasattr(classifier, 'coef_'):
-    # Get feature importance from coefficients
-    feature_names = vectorizer.get_feature_names_out()
-    coefs = classifier.coef_.mean(axis=0)  # Average across classes
-    top_idx = np.argsort(np.abs(coefs))[-20:]
-    top_features = [(feature_names[i], coefs[i]) for i in top_idx]
-    
-    fig = go.Figure(go.Bar(
-        x=[c for _, c in top_features],
-        y=[f for f, _ in top_features],
-        orientation='h',
-        marker_color='#D4AF37'
-    ))
-    fig.update_layout(
-        title="Top 20 TF-IDF Features (by coefficient magnitude)",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': '#F5F0E8'},
-        height=400,
-        xaxis={'gridcolor': 'rgba(255,255,255,0.05)'}
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
 except Exception as e:
 st.warning(f"Performance metrics not available: {str(e)}")
 
-# ====================================================================
-# SECTION 7: ALGORITHM COMPARISON
-# ====================================================================
-st.markdown("## 📋 7. Algorithm Comparison")
-
+st.markdown("## 📋 5. Algorithm Comparison")
 comparison_data = {
-"Algorithm": [
-    "Logistic Regression (Used)", "Linear Regression", "Neural Networks",
-    "SVM", "Decision Trees", "k-NN (k=3)", "Random Forest", "AdaBoost",
-    "Naive Bayes", "K-Means", "PCA", "HMM"
-],
-"Type": [
-    "Classification", "Regression", "Both",
-    "Classification", "Classification", "Classification",
-    "Ensemble", "Ensemble", "Classification",
-    "Clustering", "Dim. Reduction", "Sequential"
-],
-"Pros": [
-    "Interpretable, Fast", "Simple, Efficient", "Powerful, Non-linear",
-    "Great margins", "Interpretable", "No training", "Robust",
-    "Adaptive", "Simple, Fast", "Simple", "Visualization", "Sequence modeling"
-],
-"Cons": [
-    "Linear boundaries", "Linear only", "Black box, Data hungry",
-    "Kernel selection", "Overfitting", "Slow, Memory heavy", "Less interpretable",
-    "Sensitive to noise", "Correlated features", "K selection", "Linear only", "Complex"
-]
+"Algorithm": ["Logistic Regression (Used)", "Linear Regression", "Neural Networks", "SVM", "Decision Trees", "k-NN", "Random Forest", "K-Means", "PCA"],
+"Type": ["Classification", "Regression", "Both", "Classification", "Classification", "Classification", "Ensemble", "Clustering", "Dim. Reduction"],
+"Pros": ["Interpretable", "Simple", "Powerful", "Great margins", "Interpretable", "No training", "Robust", "Simple", "Visualization"],
+"Cons": ["Linear boundaries", "Linear only", "Black box", "Kernel selection", "Overfitting", "Slow", "Less interpretable", "K selection", "Linear only"]
 }
 st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
-
-# ====================================================================
-# SECTION 8: BIAS-VARIANCE ANALYSIS
-# ====================================================================
-st.markdown("## ⚖️ 8. Bias-Variance Analysis")
-
-st.markdown("""
-### Analysis for This Project
-
-**Logistic Regression Performance:**
-- **Bias**: Moderate - Linear decision boundary in feature space
-- **Variance**: Low - Stable across different training splits
-- **Tradeoff**: Well-balanced for this dataset size
-
-**Why This Works:**
-1. **Data Size**: 600+ samples is enough for Logistic Regression
-2. **Feature Space**: TF-IDF char n-grams provide rich representations
-3. **Class Balance**: Reasonable distribution across categories
-4. **Regularization**: L2 penalty prevents overfitting
-
-**Cross-Validation Results:**
-- Consistent performance across folds (±2%)
-- No signs of severe overfitting
-- Model generalizes well to new queries
-""")
-
-# ====================================================================
-# SECTION 9: PRACTICAL APPLICATIONS
-# ====================================================================
-st.markdown("## 🌍 9. Practical Applications")
-
-col1, col2 = st.columns(2)
-with col1:
-st.markdown("""
-### Islamic Studies Applications
-- **Ruling Classification**: Automating fiqh categorization
-- **Hadith Authentication**: Classifying chain narrators
-- **Quranic Analysis**: Topic modeling, style analysis
-- **Islamic Chatbots**: Question answering systems
-- **Reference Validation**: Cross-checking citations
-""")
-with col2:
-st.markdown("""
-### General Applications
-- **Legal Document Analysis**: Contract classification
-- **Medical Diagnosis**: Patient record classification
-- **Sentiment Analysis**: Social media monitoring
-- **Recommendation Systems**: Personalized content
-- **Fraud Detection**: Financial transaction monitoring
-""")
-
-st.markdown("""
----
-*This project demonstrates the application of ML techniques from CSE 469 to a practical Islamic ruling reference system. The hybrid retrieval+ML architecture provides both accuracy and explainability.*
-""")
 
 
 def _explanation_for(row: pd.Series) -> str:
@@ -169,17 +58,13 @@ st.rerun()
 
 def main() -> None:
 st.set_page_config(
-page_title="Islamic Ruling Reference · CSE 469 Capstone",
+page_title="Islamic Ruling Reference",
 page_icon="🕌",
 layout="wide",
 initial_sidebar_state="collapsed"
 )
 
-# Inject CSS
 inject_css()
-
-# Background pattern
-st.markdown('<div class="bg-pattern"></div>', unsafe_allow_html=True)
 
 # Watermark
 st.markdown("""
@@ -191,15 +76,8 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="header-container">
-<div class="bismillah">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</div>
 <div class="app-title">Ruling Reference</div>
-<div class="app-subtitle">
-<span>মাসআলা অনুসন্ধান</span>
-<span class="gold-dot">·</span>
-<span>CSE 469 Capstone Project</span>
-<span class="gold-dot">·</span>
-<span>HSTU</span>
-</div>
+<div class="app-subtitle">Mas'alah Search · CSE 469 Capstone · HSTU</div>
 </div>
 <hr class="header-divider">
 """, unsafe_allow_html=True)
@@ -216,10 +94,6 @@ except Exception as exc:
 st.error(f"Startup error: {exc}")
 st.stop()
 
-# ========================================================================
-# MAIN LAYOUT: Three Columns
-# ========================================================================
-
 # Mode toggle
 mode = st.radio(
 "Mode",
@@ -229,7 +103,6 @@ label_visibility="collapsed"
 )
 
 if mode == "🔍 Search":
-# Search row
 with st.container():
 st.markdown('<div class="search-container">', unsafe_allow_html=True)
 st.markdown('<div class="search-label">🔎 Type your question</div>', unsafe_allow_html=True)
@@ -248,16 +121,13 @@ with col_button:
     search_clicked = st.button("Search", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Results area - Three column layout
 if query.strip() or search_clicked:
 if query.strip():
-    # Record search history
     if "search_history" not in st.session_state:
         st.session_state.search_history = []
     
     result = retrieve_candidates(query, df, vectorizer, X, banglish_map)
     
-    # Add to history
     st.session_state.search_history.append(
         SearchHistory(
             query=query,
@@ -267,7 +137,6 @@ if query.strip():
         )
     )
     
-    # Three column layout
     with st.container():
         col_left, col_center, col_right = st.columns([1, 2.5, 1.5], gap="large")
         
@@ -287,7 +156,6 @@ if query.strip():
 else:
     st.info("Please type a question to search")
 else:
-# Show default state
 with st.container():
     col_left, col_center, col_right = st.columns([1, 2.5, 1.5], gap="large")
     with col_left:
@@ -301,7 +169,7 @@ with st.container():
                 Search for Islamic rulings in Bangla, English, or Banglish
             </div>
             <div style="color:var(--text-muted); font-size:0.85rem; margin-top:0.5rem;">
-                🔍 Try: "namaz", "riba", "বিয়ে", "interest", "prayer"
+                Try: "namaz", "riba", "বিয়ে", "interest"
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -313,28 +181,24 @@ with st.container():
                 • Use Bangla, English, or Banglish<br>
                 • Be specific for better results<br>
                 • Browse all rulings via "Browse" mode<br>
-                • Check the Apparatus panel for ML details
+                • Check Apparatus panel for ML details
             </div>
         </div>
         """, unsafe_allow_html=True)
 else:
-# Browse mode
 render_browse_mode(df)
 
-# ML Details - Full Syllabus Coverage (at bottom)
-render_ml_details_comprehensive(df, vectorizer, classifier, le, X)
+# ML Details
+render_ml_details(df, vectorizer, classifier, le, X)
 
 # Footer
 st.markdown("""
 <div style="text-align:center; padding:2rem 0 1rem; border-top:1px solid rgba(255,255,255,0.05); margin-top:2rem;">
-<div style="font-family:'Amiri',serif; font-size:1.2rem; color:var(--gold); opacity:0.6;">
-رَبِّ زِدْنِي عِلْمًا
+<div style="font-family:'Noto Serif Bengali',serif; font-size:1.2rem; color:var(--gold); opacity:0.6;">
+রব্বি জিদনি ইলমা
 </div>
 <div style="color:var(--text-muted); font-size:0.75rem; margin-top:0.5rem;">
 CSE 469 · Machine Learning · Hajee Mohammad Danesh Science and Technology University
-</div>
-<div style="color:var(--text-muted); font-size:0.7rem; margin-top:0.2rem;">
-A reference collection of verified rulings · For educational purposes only
 </div>
 </div>
 """, unsafe_allow_html=True)
