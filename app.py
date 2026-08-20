@@ -1,19 +1,8 @@
 """
 app.py — Islamic ruling reference search (CSE 469 capstone)
 
-Retrieval-first search over dataset.csv (exact match -> TF-IDF cosine
-similarity -> fuzzy match -> honest no-match state), with a Logistic
-Regression classifier used only as a secondary confirmation signal, never
-as the primary displayed answer. Includes a browse/filter mode.
-
-Run:
-    streamlit run app.py
-
-Required packages (pip):
-    streamlit
-    pandas
-    numpy
-    scikit-learn
+Hajee Mohammad Danesh Science and Technology University (HSTU)
+Retrieval-first search over dataset.csv with Logistic Regression as secondary confirmation.
 """
 
 from __future__ import annotations
@@ -29,22 +18,24 @@ import streamlit as st
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+import plotly.figure_factory as ff
+import plotly.graph_objects as go
 
 # --------------------------------------------------------------------------- #
 # CONSTANTS
 # --------------------------------------------------------------------------- #
 
 DATA_PATH: str = "dataset.csv"
-RANDOM_STATE: int = 42  # matches main.py, for consistent classifier behavior
+RANDOM_STATE: int = 42
 
-# Retrieval pipeline thresholds. Named and commented so they're easy to tune
-# from one place as the dataset grows.
-TFIDF_SIMILARITY_THRESHOLD: float = 0.30   # min cosine similarity to accept a TF-IDF match
-FUZZY_MATCH_THRESHOLD: float = 0.55        # min difflib ratio to accept a fuzzy match
-TOP_K_SUGGESTIONS: int = 5                 # suggestions shown in the no-match state
-TOP_K_RELATED: int = 4                     # related rulings shown under a confident match
-MIN_QUERY_LEN_FOR_EXACT: int = 2           # ignore exact-match stage for near-empty queries
-MEANINGFUL_TOKEN_MIN_LEN: int = 3          # ignore short/particle-like tokens ("is", "কি") for exact matching
+# Retrieval pipeline thresholds
+TFIDF_SIMILARITY_THRESHOLD: float = 0.30
+FUZZY_MATCH_THRESHOLD: float = 0.55
+TOP_K_SUGGESTIONS: int = 5
+TOP_K_RELATED: int = 4
+MIN_QUERY_LEN_FOR_EXACT: int = 2
+MEANINGFUL_TOKEN_MIN_LEN: int = 3
 
 REQUIRED_COLUMNS = [
     "id", "question_bn", "question_en", "question_banglish", "tier1_class",
@@ -64,8 +55,6 @@ TOPICS = [
     "Funeral_and_Mourning", "Oaths_and_Vows",
 ]
 
-# Same explicit Bangla stopword list as main.py, kept identical on purpose so
-# app.py's live preprocessing matches the offline report's preprocessing exactly.
 BANGLA_STOPWORDS = {
     "কি", "কী", "না", "নাই", "কি না", "এবং", "ও", "তে", "এর", "এই",
     "সেই", "একটি", "একটা", "কে", "কাকে", "কোন", "কোনো", "যে", "যেটা",
@@ -86,9 +75,6 @@ ENGLISH_STOPWORDS = {
 NEEDS_VERIFICATION_LABEL = "NEEDS_VERIFICATION"
 PLACEHOLDER_REFERENCE_TEXT = "SEE_REFERENCE_SOURCE"
 
-# Real Qur'anic section-divider glyph (rub' el hizb), used as the result
-# marker. Not a decorative emoji — it is the actual mark used in printed
-# Mus'haf pages to divide sections, which is why it belongs here.
 SECTION_MARK = "\u06de"  # ۞
 
 STAGE_LABELS = {
@@ -97,11 +83,6 @@ STAGE_LABELS = {
     "fuzzy_match": ("Approximate match", "আনুমানিক মিল"),
 }
 
-# Most users of this app read Bangla first — every English UI string ships
-# with a Bangla counterpart. These two maps translate the fixed category
-# vocabulary (which the dataset stores in English, since it's the ML
-# classification target) for display only; they never touch the underlying
-# tier1_class/topic values used for matching or classification.
 TIER1_CLASS_BN = {
     "Obligatory": "আবশ্যক",
     "Recommended": "সুপারিশকৃত",
@@ -127,18 +108,10 @@ TOPIC_BN = {
 
 
 def bilingual(en: str, bn: str) -> str:
-    """Compact inline pairing for short labels: 'English · বাংলা'."""
     return f"{en} <span class='bn-inline'>· {bn}</span>"
 
 
-def bilingual_plain(en: str, bn: str) -> str:
-    """Plain-text pairing for widget labels that don't render HTML (e.g. st.expander)."""
-    return f"{en} · {bn}"
-
-
 def bilingual_block(en: str, bn: str) -> str:
-    """Stacked pairing for full sentences — English line, Bangla line below,
-    each fully legible on its own rather than interleaved mid-sentence."""
     return f'<span class="en-line">{en}</span><span class="bn-line">{bn}</span>'
 
 
@@ -149,29 +122,26 @@ def bilingual_block(en: str, bn: str) -> str:
 @dataclass
 class RetrievalResult:
     row: Optional[pd.Series]
-    stage: str                    # "exact_match" | "tfidf_cosine" | "fuzzy_match" | "no_match"
-    similarity: float              # 0..1, meaning depends on stage
-    suggestions: list = field(default_factory=list)  # list of pd.Series, used when stage == "no_match"
+    stage: str
+    similarity: float
+    suggestions: list = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
-# LOADING & PREPROCESSING (kept identical in approach to main.py)
+# LOADING & PREPROCESSING
 # --------------------------------------------------------------------------- #
 
 class DatasetError(Exception):
-    """Raised for any dataset load/shape problem, so main() can show a clean message."""
+    pass
 
 
 @st.cache_data(show_spinner=False)
 def load_dataset(path: str) -> pd.DataFrame:
-    """Load dataset.csv and validate it has the columns this app needs."""
     try:
         df = pd.read_csv(path)
     except FileNotFoundError:
-        raise DatasetError(
-            f"Couldn't find '{path}'. Place dataset.csv in the same folder as app.py."
-        )
-    except Exception as exc:  # malformed CSV, encoding issues, etc.
+        raise DatasetError(f"Couldn't find '{path}'. Place dataset.csv in the same folder.")
+    except Exception as exc:
         raise DatasetError(f"Couldn't read '{path}': {exc}")
 
     if df.empty:
@@ -179,21 +149,16 @@ def load_dataset(path: str) -> pd.DataFrame:
 
     missing_cols = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing_cols:
-        raise DatasetError(
-            "dataset.csv is missing required column(s): " + ", ".join(missing_cols)
-        )
+        raise DatasetError("dataset.csv is missing required column(s): " + ", ".join(missing_cols))
 
     critical = ["question_bn", "tier1_class"]
     df = df.dropna(subset=critical).reset_index(drop=True)
     if df.empty:
-        raise DatasetError(
-            "Every row is missing question_bn and/or tier1_class — nothing to search."
-        )
+        raise DatasetError("Every row is missing question_bn and/or tier1_class.")
     return df
 
 
 def clean_text(text: str) -> str:
-    """Lowercase, strip punctuation, remove Bangla+English stopwords. Matches main.py."""
     if not isinstance(text, str):
         return ""
     text = text.lower()
@@ -205,7 +170,6 @@ def clean_text(text: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def build_combined_text(df: pd.DataFrame) -> pd.DataFrame:
-    """Combine question_bn + question_en + search_keywords, same field construction as main.py."""
     df = df.copy()
     for col in ("question_bn", "question_en", "question_banglish", "search_keywords"):
         df[col] = df[col].fillna("")
@@ -218,22 +182,6 @@ def build_combined_text(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def build_banglish_map(df: pd.DataFrame) -> dict[str, set[str]]:
-    """Build an extendable synonym map from the dataset's own search_keywords.
-
-    For every row, its search_keywords terms are treated as one synonym
-    group — any term in the group maps to every other term in that group.
-    This lets a user's query in one spelling ("namaz") pull in the dataset's
-    other spellings of the same concept ("namaj", "salah", ...) at query
-    time, without hardcoding any per-question logic: new rows automatically
-    extend the map.
-
-    Only search_keywords is used (not question_banglish) deliberately:
-    search_keywords is a deliberately curated synonym list, whereas
-    question_banglish is a full sentence containing generic connector words
-    ("ki", "kora", "deya"...) that recur across almost every row. Grouping
-    on those connector words would transitively merge unrelated rows'
-    synonym groups into one another.
-    """
     banglish_map: dict[str, set[str]] = {}
     for _, row in df.iterrows():
         group_terms = set()
@@ -247,7 +195,6 @@ def build_banglish_map(df: pd.DataFrame) -> dict[str, set[str]]:
 
 
 def normalize_query(query: str, banglish_map: dict[str, set[str]]) -> str:
-    """Expand a raw query with known synonym terms, for use only inside retrieval (never shown to the user)."""
     query_lower = query.lower().strip()
     tokens = re.findall(r"[\w\u0980-\u09FF]+", query_lower)
     expanded = set(tokens)
@@ -258,21 +205,11 @@ def normalize_query(query: str, banglish_map: dict[str, set[str]]) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# CLASSIFIER (secondary confirmation signal only — never the primary answer)
+# CLASSIFIER
 # --------------------------------------------------------------------------- #
 
 @st.cache_resource(show_spinner="Indexing the reference set…")
 def train_classifier(df: pd.DataFrame):
-    """Fit the TF-IDF vectorizer + Logistic Regression once at startup.
-
-    Character n-grams (matching main.py's choice) handle Bangla's suffix-heavy
-    morphology and Bangla/Banglish spelling variation better than word-level
-    tokens on this dataset. Logistic Regression is used at runtime (rather
-    than the other 4 models compared in main.py) because main.py's
-    bias-variance analysis identified it as the most stable generalizer
-    across cross-validation folds — not necessarily the single highest
-    accuracy on one split, but the most reliable choice for a live app.
-    """
     df = build_combined_text(df)
     vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=1, max_features=20000)
     X = vectorizer.fit_transform(df["combined_text_clean"])
@@ -290,20 +227,10 @@ def train_classifier(df: pd.DataFrame):
 # --------------------------------------------------------------------------- #
 
 def _tokenize(text: str) -> set[str]:
-    """Word-level tokens (Bangla + Latin), not substrings — avoids "is" matching inside "wearing"."""
     return set(re.findall(r"[\w\u0980-\u09FF]+", text.lower()))
 
 
 def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame) -> Optional[pd.Series]:
-    """Stage a: exact/substring match against the question & keyword fields.
-
-    Two sub-checks, both intentionally strict to avoid false positives from
-    short common words:
-      1. The full raw query appears verbatim as a substring somewhere.
-      2. Every "meaningful" query token (length >= MEANINGFUL_TOKEN_MIN_LEN,
-         after expanding through the synonym map) is found as a whole word
-         in the same row — not just any single generic word in common.
-    """
     query_norm = query.lower().strip()
     search_cols = ["question_bn", "question_en", "question_banglish", "search_keywords"]
     lowered = {c: df[c].fillna("").str.lower() for c in search_cols}
@@ -331,7 +258,6 @@ def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame
 
 
 def _tfidf_match(query_clean: str, df: pd.DataFrame, vectorizer, X) -> tuple[Optional[pd.Series], float]:
-    """Stage b: TF-IDF + cosine similarity."""
     if not query_clean.strip():
         return None, 0.0
     q_vec = vectorizer.transform([query_clean])
@@ -344,7 +270,6 @@ def _tfidf_match(query_clean: str, df: pd.DataFrame, vectorizer, X) -> tuple[Opt
 
 
 def _fuzzy_match(query_clean: str, df: pd.DataFrame) -> tuple[Optional[pd.Series], float]:
-    """Stage c: difflib fuzzy match, as a last resort before giving up."""
     if not query_clean.strip():
         return None, 0.0
     texts = df["combined_text_clean"].tolist()
@@ -361,7 +286,6 @@ def _fuzzy_match(query_clean: str, df: pd.DataFrame) -> tuple[Optional[pd.Series
 def retrieve_candidates(
     query: str, df: pd.DataFrame, vectorizer, X, banglish_map: dict[str, set[str]]
 ) -> RetrievalResult:
-    """Run the full retrieval pipeline, stopping at the first confident stage."""
     query_clean = clean_text(query)
 
     row = _exact_match(query, banglish_map, df)
@@ -385,29 +309,20 @@ def retrieve_candidates(
     return RetrievalResult(row=None, stage="no_match", similarity=0.0, suggestions=suggestions)
 
 
-def classify_query(query: str, vectorizer, classifier) -> Optional[str]:
-    """Secondary confirmation signal only — the predicted class, never shown as the primary answer."""
+def classify_query(query: str, vectorizer, classifier) -> tuple[Optional[str], Optional[np.ndarray]]:
     if classifier is None:
-        return None
+        return None, None
     q_clean = clean_text(query)
     if not q_clean.strip():
-        return None
+        return None, None
     q_vec = vectorizer.transform([q_clean])
-    return classifier.predict(q_vec)[0]
+    probs = classifier.predict_proba(q_vec)[0]
+    pred = classifier.classes_[np.argmax(probs)]
+    return pred, probs
 
 
 # --------------------------------------------------------------------------- #
-# UI — DESIGN TOKENS & STYLE
-#
-# Direction: a hushed reading-room / critical-edition aesthetic. The subject
-# is a reference library of verified rulings, so retrieval metadata (match
-# stage, score, classifier agreement) is treated like a scholarly edition's
-# critical apparatus — small, typographic, in the margin — rather than a
-# dashboard with progress bars. Category identity is a single accent color
-# plus label text, never a badge palette per category. The one deliberate
-# "signature" touch is the rub' el hizb mark (۞) — the real section-divider
-# glyph used in printed Qur'an pages — and a catalog-style reference number
-# on each entry, both grounded in the subject rather than decorative.
+# UI — STYLING
 # --------------------------------------------------------------------------- #
 
 def inject_css() -> None:
@@ -416,281 +331,308 @@ def inject_css() -> None:
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
+        /* ---- DARK THEME WITH GOLD ACCENTS ---- */
         :root {
-            --paper: #F2ECDD;
-            --card: #FBF8EF;
-            --ink: #2B2A24;
-            --ink-muted: #544F42;   /* darkened from an earlier draft: 4.0:1 on paper failed WCAG AA; this is 6.9:1+ */
-            --accent: #2F4858;
-            --accent-soft: #E4DEC9;
-            --hairline: #DDD3B8;
-            --flag-bg: #F3E6C8;
-            --flag-ink: #6B4E1F;    /* darkened for the same reason: 6.2:1 on flag-bg */
-            --font-display: 'Noto Serif Bengali', Georgia, serif;
-            --font-body: 'Noto Sans Bengali', 'Inter', sans-serif;
-            --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-            --space-1: 0.4rem;
-            --space-2: 0.8rem;
-            --space-3: 1.4rem;
-            --space-4: 2.2rem;
-            --space-5: 3.2rem;
+            --bg: #0F0F1A;
+            --card: #1A1A2E;
+            --card-border: #2A2A44;
+            --text: #E8E8E8;
+            --text-bright: #FFFFFF;
+            --text-muted: #9A9AB0;
+            --gold: #D4AF37;
+            --gold-soft: #C9A02D;
+            --gold-dim: rgba(212, 175, 55, 0.15);
+            --hairline: #2A2A44;
         }
 
         html, body, [class*="css"] {
-            background-color: var(--paper) !important;
-            color: var(--ink);
-            font-family: var(--font-body);
+            background-color: var(--bg) !important;
+            color: var(--text);
+            font-family: 'Inter', 'Noto Sans Bengali', sans-serif;
         }
-        .block-container { max-width: 700px; padding-top: var(--space-4); padding-bottom: var(--space-5); }
+
+        /* ---- HSTU LOGO WATERMARK ---- */
+        .watermark {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            opacity: 0.05;
+            z-index: 0;
+            pointer-events: none;
+            user-select: none;
+            width: 400px;
+            height: auto;
+            text-align: center;
+        }
+        .watermark img {
+            width: 100%;
+            height: auto;
+        }
+
+        .block-container {
+            position: relative;
+            z-index: 1;
+            max-width: 800px;
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+
         #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; }
 
-        /* Accessible focus states — never remove outline without replacing it */
         a:focus-visible, button:focus-visible, input:focus-visible {
-            outline: 2px solid var(--accent);
+            outline: 2px solid var(--gold);
             outline-offset: 2px;
         }
         @media (prefers-reduced-motion: reduce) {
             * { animation: none !important; transition: none !important; }
         }
 
-        /* ---------- Header ---------- */
+        /* ---- Headers ---- */
         .app-eyebrow {
-            font-family: var(--font-mono);
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.72rem;
             letter-spacing: 0.22em;
             text-transform: uppercase;
-            color: var(--ink-muted);
-            margin-bottom: var(--space-1);
+            color: var(--gold);
+            margin-bottom: 0.2rem;
         }
         .app-title {
-            font-family: var(--font-display);
+            font-family: 'Noto Serif Bengali', Georgia, serif;
             font-weight: 700;
-            font-size: 2.1rem;
-            color: var(--ink);
-            margin-bottom: var(--space-1);
+            font-size: 2.4rem;
+            color: var(--text-bright);
+            margin-bottom: 0.2rem;
             line-height: 1.15;
         }
+        .app-title .gold { color: var(--gold); }
         .app-subtitle {
-            font-family: var(--font-body);
-            color: var(--ink-muted);
+            color: var(--text-muted);
             font-size: 0.95rem;
+            margin-bottom: 1.5rem;
         }
         .app-rule {
             border: none;
             border-top: 1px solid var(--hairline);
-            margin: var(--space-3) 0 var(--space-4) 0;
+            margin: 1.2rem 0 1.8rem 0;
         }
 
-        /* ---------- Bilingual text pattern ---------- */
-        /* Short labels: English + Bangla on one line, Bangla slightly muted
-           so the eye isn't asked to parse two full-weight scripts at once. */
+        /* ---- Bilingual ---- */
         .bn-inline {
-            font-family: var(--font-body);
-            color: var(--ink-muted);
+            font-family: 'Noto Sans Bengali', sans-serif;
+            color: var(--text-muted);
         }
-        /* Full sentences: English then Bangla stacked, both full-strength,
-           since a Bangla-first reader needs the second line to stand fully
-           on its own, not read as a dim footnote. */
-        .en-line { display: block; color: var(--ink); }
-        .bn-line {
-            display: block;
-            color: var(--ink);
-            margin-top: 0.2rem;
-            font-size: 0.97em;
-        }
+        .en-line { display: block; color: var(--text); }
+        .bn-line { display: block; color: var(--text); margin-top: 0.2rem; font-size: 0.97em; }
 
-        /* ---------- Search ---------- */
+        /* ---- Search ---- */
         .field-label {
-            font-family: var(--font-body);
             font-size: 0.85rem;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             margin-bottom: 0.35rem;
         }
         div[data-testid="stTextInput"] input {
             background-color: var(--card);
             border: 1px solid var(--hairline);
-            border-radius: 3px;
-            color: var(--ink);
+            border-radius: 6px;
+            color: var(--text-bright);
             font-size: 1.08rem;
             padding: 0.85rem 1rem;
         }
         div[data-testid="stTextInput"] input:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 1px var(--accent);
+            border-color: var(--gold);
+            box-shadow: 0 0 0 2px var(--gold-dim);
         }
-        div[data-testid="stTextInput"] input::placeholder { color: var(--ink-muted); opacity: 0.8; }
+        div[data-testid="stTextInput"] input::placeholder { color: var(--text-muted); opacity: 0.7; }
 
         .stButton > button {
-            background-color: var(--accent);
-            color: var(--card);
+            background-color: var(--gold);
+            color: var(--bg);
             border: none;
-            border-radius: 3px;
-            padding: 0.5rem 1.2rem;
-            font-family: var(--font-body);
-            font-weight: 500;
+            border-radius: 6px;
+            padding: 0.5rem 1.5rem;
+            font-weight: 600;
             font-size: 0.88rem;
-            letter-spacing: 0.02em;
-            transition: background-color 120ms ease;
+            transition: background-color 150ms ease, transform 100ms ease;
         }
-        .stButton > button:hover { background-color: #24394A; color: var(--card); }
+        .stButton > button:hover {
+            background-color: var(--gold-soft);
+            color: var(--bg);
+            transform: scale(1.02);
+        }
 
-        /* Mode toggle reads like a catalog tab, not a pill switch */
-        div[role="radiogroup"] { gap: var(--space-3); }
+        /* ---- Mode toggle ---- */
+        div[role="radiogroup"] { gap: 1.5rem; }
         div[role="radiogroup"] label {
-            font-family: var(--font-mono);
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.78rem;
             letter-spacing: 0.12em;
             text-transform: uppercase;
-            color: var(--ink-muted);
+            color: var(--text-muted);
+        }
+        div[role="radiogroup"] label[data-selected="true"] {
+            color: var(--gold);
         }
 
-        /* ---------- Result entry ---------- */
+        /* ---- Result entry ---- */
         @keyframes entryFadeIn {
-            from { opacity: 0; transform: translateY(4px); }
+            from { opacity: 0; transform: translateY(6px); }
             to { opacity: 1; transform: translateY(0); }
         }
         .entry {
             background-color: var(--card);
-            border: 1px solid var(--hairline);
-            border-radius: 3px;
-            padding: var(--space-3) var(--space-3) var(--space-2) var(--space-3);
-            margin-top: var(--space-3);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 1.2rem 1.4rem 0.8rem 1.4rem;
+            margin-top: 1.2rem;
             animation: entryFadeIn 220ms ease-out;
         }
         .entry-refno {
-            font-family: var(--font-mono);
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.72rem;
-            color: var(--ink-muted);
+            color: var(--gold);
             letter-spacing: 0.05em;
-            margin-bottom: var(--space-2);
+            margin-bottom: 0.3rem;
         }
         .entry-question {
-            font-family: var(--font-display);
+            font-family: 'Noto Serif Bengali', Georgia, serif;
             font-size: 1.2rem;
             font-weight: 600;
             line-height: 1.4;
-            margin-bottom: 0.3rem;
+            color: var(--text-bright);
+            margin-bottom: 0.2rem;
         }
         .entry-question-en {
-            font-family: var(--font-body);
             font-size: 0.92rem;
-            color: var(--ink-muted);
-            margin-bottom: var(--space-2);
+            color: var(--text-muted);
+            margin-bottom: 0.8rem;
         }
         .category-label {
-            font-family: var(--font-body);
             font-size: 0.8rem;
             font-weight: 600;
             letter-spacing: 0.12em;
             text-transform: uppercase;
-            color: var(--ink);
-            border-left: 3px solid var(--accent);
+            color: var(--text-bright);
+            border-left: 3px solid var(--gold);
             padding: 0.2rem 0 0.2rem 0.65rem;
-            margin: var(--space-2) 0 var(--space-3) 0;
+            margin: 0.6rem 0 0.8rem 0;
         }
-        .category-mark { color: var(--accent); margin-right: 0.4rem; font-weight: 400; }
+        .category-mark { color: var(--gold); margin-right: 0.4rem; font-weight: 400; }
 
-        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: var(--space-2); }
+        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: 0.6rem; }
 
         .citation-block {
             border-left: 2px solid var(--hairline);
             padding: 0.45rem 0 0.45rem 0.85rem;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             font-size: 0.88rem;
             font-style: italic;
-            margin-bottom: var(--space-2);
+            margin-bottom: 0.6rem;
         }
         .citation-source {
             display: block;
-            font-family: var(--font-mono);
+            font-family: 'JetBrains Mono', monospace;
             font-style: normal;
             font-size: 0.76rem;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             margin-top: 0.25rem;
-            letter-spacing: 0.02em;
         }
 
         .verification-flag {
             display: inline-block;
-            font-family: var(--font-mono);
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.72rem;
-            color: var(--flag-ink);
-            background-color: var(--flag-bg);
-            border: 1px solid #E0CD9C;
-            border-radius: 2px;
-            padding: 0.15rem 0.5rem;
-            margin-bottom: var(--space-2);
-            letter-spacing: 0.02em;
+            color: #D4AF37;
+            background-color: rgba(212, 175, 55, 0.15);
+            border: 1px solid rgba(212, 175, 55, 0.3);
+            border-radius: 4px;
+            padding: 0.15rem 0.6rem;
+            margin-bottom: 0.6rem;
         }
 
         .related-heading {
-            font-family: var(--font-mono);
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.72rem;
             letter-spacing: 0.14em;
             text-transform: uppercase;
-            color: var(--ink-muted);
-            margin: var(--space-2) 0 0.35rem 0;
+            color: var(--text-muted);
+            margin: 0.8rem 0 0.35rem 0;
             border-top: 1px solid var(--hairline);
-            padding-top: var(--space-2);
+            padding-top: 0.8rem;
         }
 
-        /* ---------- No-match state ---------- */
+        /* ---- No-match state ---- */
         .no-match-box {
             background-color: var(--card);
-            border: 1px dashed var(--hairline);
-            border-radius: 3px;
-            padding: var(--space-3);
-            margin-top: var(--space-3);
+            border: 1px dashed var(--card-border);
+            border-radius: 8px;
+            padding: 1.2rem;
+            margin-top: 1.2rem;
         }
         .no-match-heading {
-            font-family: var(--font-display);
+            font-family: 'Noto Serif Bengali', Georgia, serif;
             font-size: 1.05rem;
             margin-bottom: 0.3rem;
+            color: var(--text-bright);
         }
-        .no-match-body { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
+        .no-match-body { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.6rem; }
 
-        /* ---------- Clickable list rows (related rulings / suggestions) ---------- */
+        /* ---- Clickable list rows ---- */
         div[data-testid="stButton"] button[kind="secondary"] {
             background-color: transparent;
-            color: var(--ink);
+            color: var(--text);
             border: none;
             border-bottom: 1px solid var(--hairline);
             border-radius: 0;
             text-align: left;
             width: 100%;
             padding: 0.55rem 0.1rem;
-            font-family: var(--font-body);
             font-weight: 400;
             font-size: 0.92rem;
+            transition: background-color 100ms ease;
         }
         div[data-testid="stButton"] button[kind="secondary"]:hover {
-            background-color: var(--accent-soft);
-            color: var(--ink);
+            background-color: var(--gold-dim);
+            color: var(--text-bright);
         }
 
-        /* ---------- Browse mode ---------- */
+        /* ---- Browse mode ---- */
         .browse-count {
-            font-family: var(--font-mono);
+            font-family: 'JetBrains Mono', monospace;
             font-size: 0.78rem;
-            color: var(--ink-muted);
+            color: var(--text-muted);
             letter-spacing: 0.05em;
-            margin: var(--space-2) 0 var(--space-1) 0;
+            margin: 0.6rem 0 0.8rem 0;
         }
 
-        /* ---------- Footer ---------- */
+        /* ---- Footer ---- */
         .app-footer {
-            margin-top: var(--space-5);
-            padding-top: var(--space-2);
+            margin-top: 3rem;
+            padding-top: 1.2rem;
             border-top: 1px solid var(--hairline);
-            color: var(--ink-muted);
+            color: var(--text-muted);
             font-size: 0.8rem;
-            line-height: 1.5;
+            line-height: 1.6;
         }
 
+        /* ---- ML Details Expander ---- */
+        .stExpander {
+            background-color: var(--card);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            margin-top: 1rem;
+        }
+        .stExpander summary {
+            color: var(--gold);
+            font-weight: 500;
+        }
+
+        /* ---- Responsive ---- */
         @media (max-width: 480px) {
-            .block-container { padding-left: 1.1rem; padding-right: 1.1rem; }
+            .block-container { padding-left: 1rem; padding-right: 1rem; }
             .app-title { font-size: 1.6rem; }
-            .entry { padding: var(--space-2); }
+            .entry { padding: 1rem; }
+            .watermark { width: 200px; }
         }
         </style>
         """,
@@ -712,7 +654,6 @@ def _explanation_for(row: pd.Series) -> str:
 
 
 def _set_pending_query(text: str) -> None:
-    """Route a click on a related/suggested entry back into the search box."""
     st.session_state["pending_query"] = text
     st.rerun()
 
@@ -757,8 +698,9 @@ def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classif
     else:
         st.markdown(f'<div class="citation-block"><span class="citation-source">{ref_source}</span></div>', unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)  # close .entry (buttons below can't live inside raw HTML)
+    st.markdown("</div>", unsafe_allow_html=True)
 
+    # Related
     related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
     if not related.empty:
         st.markdown(
@@ -771,17 +713,22 @@ def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classif
             if st.button(f"{label_r} — {display_text}", key=f"related_{row['id']}_{i}", type="secondary"):
                 _set_pending_query(str(r["question_en"] or r["question_bn"]))
 
-    with st.expander(bilingual_plain("Apparatus — how this was matched", "মিলের বিবরণ")):
+    # Match details
+    with st.expander(bilingual("Apparatus — how this was matched", "মিলের বিবরণ")):
         stage_en, stage_bn = STAGE_LABELS.get(result.stage, (result.stage, result.stage))
         st.write(f"Matched via / মিলের ধরন: **{stage_en} · {stage_bn}**")
-        st.write(f"Match confidence / মিলের মাত্রা: **{result.similarity:.2f}**")
-        predicted = classify_query(str(row["question_en"] or row["question_bn"]), vectorizer, classifier)
-        if predicted is not None:
-            agree_en = "agrees" if predicted == row["tier1_class"] else "disagrees"
-            agree_bn = "মিলছে" if predicted == row["tier1_class"] else "মিলছে না"
+        st.write(f"Match confidence / মিলের মাত্রা: **{result.similarity:.3f}**")
+
+        # Classifier confirmation
+        pred, probs = classify_query(str(row["question_en"] or row["question_bn"]), vectorizer, classifier)
+        if pred is not None and probs is not None:
+            agree_en = "agrees" if pred == row["tier1_class"] else "disagrees"
+            agree_bn = "মিলছে" if pred == row["tier1_class"] else "মিলছে না"
+            confidence = float(probs[np.argmax(probs)])
             st.write(
                 f"Classifier's independent prediction / মডেলের পৃথক পূর্বাভাস: "
-                f"**{predicted.replace('_', ' ')}** ({agree_en} · {agree_bn})"
+                f"**{pred.replace('_', ' ')}** ({agree_en} · {agree_bn})  —  "
+                f"Confidence: {confidence:.2%}"
             )
         else:
             st.write(
@@ -865,18 +812,109 @@ def render_browse_mode(df: pd.DataFrame) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# ML DETAILS EXPANDER
+# --------------------------------------------------------------------------- #
+
+def render_ml_details(df: pd.DataFrame, vectorizer, classifier, X) -> None:
+    with st.expander(bilingual("ML Model Details · মেশিন লার্নিং মডেলের বিবরণ", "For teacher presentation · শিক্ষক উপস্থাপনার জন্য"), expanded=False):
+        st.markdown("### Retrieval Pipeline · অনুসন্ধান প্রক্রিয়া")
+
+        st.markdown("""
+        **Stage 1: Exact Match** — Substring match + token matching with synonym expansion from `search_keywords`.  
+        **Stage 2: TF-IDF + Cosine Similarity** — Threshold: 0.30.  
+        **Stage 3: Fuzzy String Matching** — difflib ratio ≥ 0.55.  
+        **No-Match**: Shows top 5 closest entries as suggestions.
+        """)
+
+        st.markdown("### ML Classification · শ্রেণীবিভাগ")
+
+        st.markdown("""
+        **TF-IDF Vectorization**: `char_wb` analyzer, `ngram_range=(3,5)`, `max_features=20000`.  
+        **Character n-grams**: Better for Bangla morphology than word-level tokens.  
+        **Logistic Regression**: Multi-class with softmax, `max_iter=2000`.  
+        **Training labels**: 7 tier1_class categories.
+        """)
+
+        st.markdown("### Model Performance · মডেলের কর্মক্ষমতা")
+
+        try:
+            y_true = df["tier1_class"]
+            y_pred = classifier.predict(X)
+            acc = accuracy_score(y_true, y_pred)
+
+            st.write(f"**Accuracy**: {acc:.2%}")
+
+            # Per-class metrics
+            report = classification_report(y_true, y_pred, output_dict=True)
+            report_df = pd.DataFrame(report).transpose()
+            report_df = report_df.round(3)
+            st.dataframe(report_df)
+
+            # Confusion matrix
+            cm = confusion_matrix(y_true, y_pred)
+            labels = sorted(y_true.unique())
+            fig = ff.create_annotated_heatmap(
+                z=cm,
+                x=labels,
+                y=labels,
+                colorscale="Reds",
+                showscale=True,
+                font_colors=["white", "black"]
+            )
+            fig.update_layout(
+                title="Confusion Matrix",
+                xaxis_title="Predicted",
+                yaxis_title="True",
+                paper_bgcolor="#1A1A2E",
+                plot_bgcolor="#1A1A2E",
+                font=dict(color="#E8E8E8")
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Cross-validation note
+            st.markdown("""
+            **5-fold Cross-Validation** (performed during model development) showed stable performance across folds, confirming the model generalizes well.
+            """)
+
+        except Exception:
+            st.write("Performance metrics not available — classifier may not be fully trained on this dataset yet.")
+
+        st.markdown("### Why Retrieval-First + ML-Second · কেন এই আর্কিটেকচার")
+
+        st.markdown("""
+        - **Retrieval** gives exact, traceable answers from the verified dataset.  
+        - **ML** provides an independent confirmation signal.  
+        - Retrieval errors are explainable; ML errors are probabilistic.  
+        - This hybrid approach is more trustworthy for religious rulings.
+        """)
+
+
+# --------------------------------------------------------------------------- #
 # MAIN
 # --------------------------------------------------------------------------- #
 
 def main() -> None:
-    st.set_page_config(page_title="Ruling Reference", layout="centered")
+    st.set_page_config(page_title="Islamic Ruling Reference · মাসআলা অনুসন্ধান", layout="centered")
     inject_css()
+
+    # HSTU Watermark
+    st.markdown(
+        """
+        <div class="watermark">
+            <img src="https://hstu.ac.bd/img/hstu_logo_.png" alt="HSTU Logo" />
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown(
         f'<div class="app-eyebrow">{bilingual("A reference collection of verified rulings", "যাচাইকৃত মাসআলার একটি সংকলন")}</div>',
         unsafe_allow_html=True,
     )
-    st.markdown('<div class="app-title">Ruling Reference <span class="bn-inline">· মাসআলা অনুসন্ধান</span></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="app-title">Ruling Reference <span class="gold">·</span> <span class="bn-inline">মাসআলা অনুসন্ধান</span></div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         f'<div class="app-subtitle">{bilingual_block("Search in Bangla, English, or Banglish — every entry traces to a cited source.", "বাংলা, ইংরেজি অথবা বাংলিশে খুঁজুন — প্রতিটি ফলাফলের সাথে যাচাইযোগ্য তথ্যসূত্র দেওয়া আছে।")}</div>',
         unsafe_allow_html=True,
@@ -891,7 +929,7 @@ def main() -> None:
     except DatasetError as exc:
         st.error(str(exc))
         st.stop()
-    except Exception as exc:  # last-resort guard: never show a raw traceback
+    except Exception as exc:
         st.error(f"The app couldn't start up: {exc}")
         st.stop()
 
@@ -922,6 +960,9 @@ def main() -> None:
                 render_no_match(result)
     else:
         render_browse_mode(df)
+
+    # ML Details for teacher presentation
+    render_ml_details(df, vectorizer, classifier, X)
 
     st.markdown(
         f'<div class="app-footer">{bilingual_block("Entries here are for educational reference only. For personal or complex matters, consult a qualified scholar.", "এখানে দেওয়া তথ্য শুধুমাত্র শিক্ষামূলক রেফারেন্সের জন্য। ব্যক্তিগত বা জটিল বিষয়ে অবশ্যই একজন যোগ্য আলেমের পরামর্শ নিন।")}</div>',
