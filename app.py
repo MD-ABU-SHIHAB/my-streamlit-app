@@ -112,6 +112,23 @@ TOPIC_BN = {
     "Oaths_and_Vows": "শপথ ও মানত",
 }
 
+TIER1_COLORS = {
+    "Obligatory": "#00C853",
+    "Recommended": "#2196F3",
+    "Permissible": "#FFC107",
+    "Disliked": "#FF9800",
+    "Forbidden": "#F44336",
+    "Religious_Innovation": "#9C27B0",
+    "Faith_Violation": "#607D8B",
+}
+
+STAGE_ICONS = {
+    "exact_match": "🎯",
+    "tfidf_cosine": "📊",
+    "fuzzy_match": "🔍",
+    "no_match": "❓"
+}
+
 
 def bilingual(en: str, bn: str) -> str:
     return f"{en} <span class='bn-inline'>· {bn}</span>"
@@ -349,6 +366,12 @@ def inject_css() -> None:
             --gold-soft: #C9A02D;
             --gold-dim: rgba(212, 175, 55, 0.15);
             --hairline: #2A2A44;
+            --shadow: rgba(0, 0, 0, 0.4);
+        }
+
+        /* Hide Streamlit branding */
+        #MainMenu, header[data-testid="stHeader"], footer {
+            display: none !important;
         }
 
         html, body, [class*="css"] {
@@ -379,12 +402,10 @@ def inject_css() -> None:
         .block-container {
             position: relative;
             z-index: 1;
-            max-width: 800px;
+            max-width: 1200px;
             padding-top: 2rem;
             padding-bottom: 3rem;
         }
-
-        #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; }
 
         a:focus-visible, button:focus-visible, input:focus-visible {
             outline: 2px solid var(--gold);
@@ -406,10 +427,11 @@ def inject_css() -> None:
         .app-title {
             font-family: 'Noto Serif Bengali', Georgia, serif;
             font-weight: 700;
-            font-size: 2.4rem;
+            font-size: 2.8rem;
             color: var(--text-bright);
             margin-bottom: 0.2rem;
             line-height: 1.15;
+            text-shadow: 0 2px 4px var(--shadow);
         }
         .app-title .gold { color: var(--gold); }
         .app-subtitle {
@@ -431,67 +453,117 @@ def inject_css() -> None:
         .en-line { display: block; color: var(--text); }
         .bn-line { display: block; color: var(--text); margin-top: 0.2rem; font-size: 0.97em; }
 
-        /* ---- Search ---- */
+        /* ---- Search Section ---- */
+        .search-container {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-end;
+            background: var(--card);
+            padding: 1.2rem;
+            border-radius: 12px;
+            border: 1px solid var(--card-border);
+            box-shadow: 0 4px 20px var(--shadow);
+            margin-bottom: 1.5rem;
+        }
+        .search-container .stTextInput {
+            flex: 1;
+        }
+        .search-container .stButton {
+            flex-shrink: 0;
+        }
         .field-label {
             font-size: 0.85rem;
             color: var(--text-muted);
             margin-bottom: 0.35rem;
         }
         div[data-testid="stTextInput"] input {
-            background-color: var(--card);
+            background-color: var(--bg);
             border: 1px solid var(--hairline);
-            border-radius: 6px;
+            border-radius: 8px;
             color: var(--text-bright);
             font-size: 1.08rem;
             padding: 0.85rem 1rem;
+            transition: all 0.2s ease;
         }
         div[data-testid="stTextInput"] input:focus {
             border-color: var(--gold);
-            box-shadow: 0 0 0 2px var(--gold-dim);
+            box-shadow: 0 0 0 3px var(--gold-dim);
         }
-        div[data-testid="stTextInput"] input::placeholder { color: var(--text-muted); opacity: 0.7; }
+        div[data-testid="stTextInput"] input::placeholder { 
+            color: var(--text-muted); 
+            opacity: 0.7; 
+        }
 
         .stButton > button {
-            background-color: var(--gold);
+            background: linear-gradient(135deg, var(--gold), var(--gold-soft));
             color: var(--bg);
             border: none;
-            border-radius: 6px;
-            padding: 0.5rem 1.5rem;
+            border-radius: 8px;
+            padding: 0.7rem 2rem;
             font-weight: 600;
-            font-size: 0.88rem;
-            transition: background-color 150ms ease, transform 100ms ease;
+            font-size: 0.95rem;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 10px rgba(212, 175, 55, 0.3);
+            width: 100%;
+            min-height: 48px;
         }
         .stButton > button:hover {
-            background-color: var(--gold-soft);
-            color: var(--bg);
-            transform: scale(1.02);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(212, 175, 55, 0.4);
+        }
+        .stButton > button:active {
+            transform: translateY(0);
         }
 
         /* ---- Mode toggle ---- */
-        div[role="radiogroup"] { gap: 1.5rem; }
+        div[role="radiogroup"] { 
+            gap: 1.5rem;
+            background: var(--card);
+            padding: 0.5rem 1rem;
+            border-radius: 10px;
+            border: 1px solid var(--card-border);
+        }
         div[role="radiogroup"] label {
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.78rem;
             letter-spacing: 0.12em;
             text-transform: uppercase;
             color: var(--text-muted);
+            padding: 0.3rem 0.8rem;
+            border-radius: 6px;
+            transition: all 0.2s ease;
         }
         div[role="radiogroup"] label[data-selected="true"] {
             color: var(--gold);
+            background: var(--gold-dim);
+        }
+
+        /* ---- Two Column Layout ---- */
+        .result-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.2rem;
+            margin-top: 1.2rem;
         }
 
         /* ---- Result entry ---- */
         @keyframes entryFadeIn {
-            from { opacity: 0; transform: translateY(6px); }
+            from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
         .entry {
-            background-color: var(--card);
+            background: linear-gradient(145deg, var(--card), var(--bg));
             border: 1px solid var(--card-border);
-            border-radius: 8px;
-            padding: 1.2rem 1.4rem 0.8rem 1.4rem;
-            margin-top: 1.2rem;
-            animation: entryFadeIn 220ms ease-out;
+            border-radius: 12px;
+            padding: 1.4rem;
+            animation: entryFadeIn 300ms ease-out;
+            box-shadow: 0 4px 20px var(--shadow);
+            transition: all 0.2s ease;
+            height: fit-content;
+        }
+        .entry:hover {
+            border-color: var(--gold-dim);
+            box-shadow: 0 6px 30px rgba(212, 175, 55, 0.1);
         }
         .entry-refno {
             font-family: 'JetBrains Mono', monospace;
@@ -504,7 +576,7 @@ def inject_css() -> None:
             font-family: 'Noto Serif Bengali', Georgia, serif;
             font-size: 1.2rem;
             font-weight: 600;
-            line-height: 1.4;
+            line-height: 1.5;
             color: var(--text-bright);
             margin-bottom: 0.2rem;
         }
@@ -519,28 +591,37 @@ def inject_css() -> None:
             letter-spacing: 0.12em;
             text-transform: uppercase;
             color: var(--text-bright);
-            border-left: 3px solid var(--gold);
-            padding: 0.2rem 0 0.2rem 0.65rem;
+            border-left: 4px solid var(--gold);
+            padding: 0.2rem 0 0.2rem 0.75rem;
             margin: 0.6rem 0 0.8rem 0;
+            background: var(--gold-dim);
+            border-radius: 0 4px 4px 0;
         }
         .category-mark { color: var(--gold); margin-right: 0.4rem; font-weight: 400; }
 
-        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: 0.6rem; }
+        .explanation-text { 
+            font-size: 0.99rem; 
+            line-height: 1.7; 
+            margin-bottom: 0.6rem;
+            color: var(--text);
+        }
 
         .citation-block {
-            border-left: 2px solid var(--hairline);
+            border-left: 3px solid var(--gold-dim);
             padding: 0.45rem 0 0.45rem 0.85rem;
             color: var(--text-muted);
             font-size: 0.88rem;
             font-style: italic;
             margin-bottom: 0.6rem;
+            background: rgba(212, 175, 55, 0.05);
+            border-radius: 0 4px 4px 0;
         }
         .citation-source {
             display: block;
             font-family: 'JetBrains Mono', monospace;
             font-style: normal;
             font-size: 0.76rem;
-            color: var(--text-muted);
+            color: var(--gold);
             margin-top: 0.25rem;
         }
 
@@ -548,12 +629,82 @@ def inject_css() -> None:
             display: inline-block;
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.72rem;
-            color: #D4AF37;
-            background-color: rgba(212, 175, 55, 0.15);
+            color: var(--gold);
+            background: var(--gold-dim);
             border: 1px solid rgba(212, 175, 55, 0.3);
-            border-radius: 4px;
+            border-radius: 6px;
             padding: 0.15rem 0.6rem;
             margin-bottom: 0.6rem;
+        }
+
+        /* ---- Apparatus Panel ---- */
+        .apparatus-panel {
+            background: var(--card);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 1.2rem 1.4rem;
+            margin-top: 0.8rem;
+            animation: entryFadeIn 300ms ease-out;
+            box-shadow: 0 4px 20px var(--shadow);
+        }
+        .apparatus-panel .stage-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--gold-dim);
+            color: var(--gold);
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 500;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .apparatus-panel .confidence-bar {
+            height: 6px;
+            background: var(--hairline);
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 0.5rem 0;
+        }
+        .apparatus-panel .confidence-bar .fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--gold), var(--gold-soft));
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+        .apparatus-panel .classifier-result {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            margin-top: 0.3rem;
+        }
+        .apparatus-panel .classifier-result.agrees {
+            background: rgba(0, 200, 83, 0.15);
+            border: 1px solid rgba(0, 200, 83, 0.3);
+        }
+        .apparatus-panel .classifier-result.disagrees {
+            background: rgba(244, 67, 54, 0.15);
+            border: 1px solid rgba(244, 67, 54, 0.3);
+        }
+
+        .apparatus-panel .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.3rem 0;
+            border-bottom: 1px solid var(--hairline);
+            font-size: 0.88rem;
+        }
+        .apparatus-panel .stat-row:last-child {
+            border-bottom: none;
+        }
+        .apparatus-panel .stat-label {
+            color: var(--text-muted);
+        }
+        .apparatus-panel .stat-value {
+            color: var(--text-bright);
+            font-weight: 500;
         }
 
         .related-heading {
@@ -569,23 +720,29 @@ def inject_css() -> None:
 
         /* ---- No-match state ---- */
         .no-match-box {
-            background-color: var(--card);
-            border: 1px dashed var(--card-border);
-            border-radius: 8px;
-            padding: 1.2rem;
+            background: var(--card);
+            border: 2px dashed var(--card-border);
+            border-radius: 12px;
+            padding: 2rem;
             margin-top: 1.2rem;
+            text-align: center;
+            box-shadow: 0 4px 20px var(--shadow);
         }
         .no-match-heading {
             font-family: 'Noto Serif Bengali', Georgia, serif;
-            font-size: 1.05rem;
+            font-size: 1.2rem;
             margin-bottom: 0.3rem;
             color: var(--text-bright);
         }
-        .no-match-body { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.6rem; }
+        .no-match-body { 
+            color: var(--text-muted); 
+            font-size: 0.95rem; 
+            margin-bottom: 0.6rem; 
+        }
 
         /* ---- Clickable list rows ---- */
         div[data-testid="stButton"] button[kind="secondary"] {
-            background-color: transparent;
+            background: transparent;
             color: var(--text);
             border: none;
             border-bottom: 1px solid var(--hairline);
@@ -595,11 +752,13 @@ def inject_css() -> None:
             padding: 0.55rem 0.1rem;
             font-weight: 400;
             font-size: 0.92rem;
-            transition: background-color 100ms ease;
+            transition: all 0.15s ease;
+            box-shadow: none;
         }
         div[data-testid="stButton"] button[kind="secondary"]:hover {
-            background-color: var(--gold-dim);
+            background: var(--gold-dim);
             color: var(--text-bright);
+            transform: translateX(4px);
         }
 
         /* ---- Browse mode ---- */
@@ -619,26 +778,46 @@ def inject_css() -> None:
             color: var(--text-muted);
             font-size: 0.8rem;
             line-height: 1.6;
+            text-align: center;
         }
 
         /* ---- ML Details Expander ---- */
         .stExpander {
-            background-color: var(--card);
+            background: var(--card);
             border: 1px solid var(--card-border);
-            border-radius: 8px;
+            border-radius: 12px;
             margin-top: 1rem;
+            box-shadow: 0 4px 20px var(--shadow);
         }
         .stExpander summary {
             color: var(--gold);
             font-weight: 500;
+            padding: 0.5rem 0;
         }
 
         /* ---- Responsive ---- */
-        @media (max-width: 480px) {
+        @media (max-width: 768px) {
+            .result-grid {
+                grid-template-columns: 1fr;
+            }
             .block-container { padding-left: 1rem; padding-right: 1rem; }
-            .app-title { font-size: 1.6rem; }
+            .app-title { font-size: 1.8rem; }
             .entry { padding: 1rem; }
             .watermark { width: 200px; }
+            .search-container {
+                flex-direction: column;
+                padding: 1rem;
+            }
+            .search-container .stButton {
+                width: 100%;
+            }
+            div[role="radiogroup"] {
+                flex-wrap: wrap;
+                gap: 0.5rem;
+            }
+        }
+        @media (max-width: 480px) {
+            .app-title { font-size: 1.4rem; }
         }
         </style>
         """,
@@ -666,94 +845,129 @@ def _set_pending_query(text: str) -> None:
 
 def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classifier) -> None:
     row = result.row
-    st.markdown('<div class="entry">', unsafe_allow_html=True)
-
-    st.markdown(f'<div class="entry-refno">Ref. No. {int(row["id"]):04d}</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="entry-question">{row["question_bn"]}</div>', unsafe_allow_html=True)
-    if str(row.get("question_en", "")).strip():
-        st.markdown(f'<div class="entry-question-en">{row["question_en"]}</div>', unsafe_allow_html=True)
-
     tier1 = str(row["tier1_class"])
-    label = tier1.replace("_", " ")
-    label_bn = TIER1_CLASS_BN.get(tier1, "")
-    strictness = str(row.get("strictness_label", "")).strip()
-    label_text = f"{label} — {strictness}" if strictness else label
-    st.markdown(
-        f'<div class="category-label"><span class="category-mark">{SECTION_MARK}</span>{label_text}'
-        f'<span class="bn-inline"> · {label_bn}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-    if str(row.get("verification_status", "")).strip() == NEEDS_VERIFICATION_LABEL:
-        st.markdown(
-            f'<div class="verification-flag">{bilingual("Unverified reference — pending scholarly check", "যাচাই বাকি — বিশেষজ্ঞ পর্যালোচনার অপেক্ষায়")}</div>',
-            unsafe_allow_html=True,
-        )
-
-    explanation = _explanation_for(row)
-    if explanation:
-        st.markdown(f'<div class="explanation-text">{explanation}</div>', unsafe_allow_html=True)
-
-    ref_text = str(row.get("reference_text", "")).strip()
-    ref_source = str(row.get("reference_source", "")).strip()
-    if ref_text and ref_text != PLACEHOLDER_REFERENCE_TEXT:
-        st.markdown(
-            f'<div class="citation-block">{ref_text}<span class="citation-source">{ref_source}</span></div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(f'<div class="citation-block"><span class="citation-source">{ref_source}</span></div>', unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Related
-    related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
-    if not related.empty:
-        st.markdown(
-            f'<div class="related-heading">{bilingual("Related entries", "সম্পর্কিত মাসআলা")}</div>',
-            unsafe_allow_html=True,
-        )
-        for i, r in related.iterrows():
-            label_r = str(r["tier1_class"]).replace("_", " ")
-            display_text = r["question_en"] or r["question_bn"]
-            if st.button(f"{label_r} — {display_text}", key=f"related_{row['id']}_{i}", type="secondary"):
-                _set_pending_query(str(r["question_en"] or r["question_bn"]))
-
-    # Match details
-    with st.expander(bilingual("Apparatus — how this was matched", "মিলের বিবরণ")):
+    color = TIER1_COLORS.get(tier1, "#D4AF37")
+    stage_icon = STAGE_ICONS.get(result.stage, "📌")
+    
+    # Two column layout
+    col1, col2 = st.columns([1.4, 1], gap="large")
+    
+    with col1:
+        # Main Result Card
+        st.markdown(f"""
+        <div class="entry">
+            <div class="entry-refno">Ref. No. {int(row["id"]):04d}</div>
+            <div class="entry-question">{row["question_bn"]}</div>
+        """, unsafe_allow_html=True)
+        
+        if str(row.get("question_en", "")).strip():
+            st.markdown(f'<div class="entry-question-en">{row["question_en"]}</div>', unsafe_allow_html=True)
+        
+        st.markdown(f"""
+            <div class="category-label" style="border-left-color: {color};">
+                <span class="category-mark">{SECTION_MARK}</span>
+                {tier1.replace('_', ' ')} — {str(row.get('strictness_label', '')).strip() if str(row.get('strictness_label', '')).strip() else ''}
+                <span class="bn-inline"> · {TIER1_CLASS_BN.get(tier1, '')}</span>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        if str(row.get("verification_status", "")).strip() == NEEDS_VERIFICATION_LABEL:
+            st.markdown(
+                f'<div class="verification-flag">{bilingual("Unverified reference — pending scholarly check", "যাচাই বাকি — বিশেষজ্ঞ পর্যালোচনার অপেক্ষায়")}</div>',
+                unsafe_allow_html=True,
+            )
+        
+        explanation = _explanation_for(row)
+        if explanation:
+            st.markdown(f'<div class="explanation-text">{explanation}</div>', unsafe_allow_html=True)
+        
+        ref_text = str(row.get("reference_text", "")).strip()
+        ref_source = str(row.get("reference_source", "")).strip()
+        if ref_text and ref_text != PLACEHOLDER_REFERENCE_TEXT:
+            st.markdown(
+                f'<div class="citation-block">{ref_text}<span class="citation-source">{ref_source}</span></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(f'<div class="citation-block"><span class="citation-source">{ref_source}</span></div>', unsafe_allow_html=True)
+        
+        st.markdown("</div>", unsafe_allow_html=True)
+        
+        # Related entries
+        related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
+        if not related.empty:
+            st.markdown(
+                f'<div class="related-heading">{bilingual("Related entries", "সম্পর্কিত মাসআলা")}</div>',
+                unsafe_allow_html=True,
+            )
+            for i, r in related.iterrows():
+                label_r = str(r["tier1_class"]).replace("_", " ")
+                display_text = r["question_en"] or r["question_bn"]
+                if st.button(f"{label_r} — {display_text}", key=f"related_{row['id']}_{i}", type="secondary"):
+                    _set_pending_query(str(r["question_en"] or r["question_bn"]))
+    
+    with col2:
+        # Apparatus Panel
         stage_en, stage_bn = STAGE_LABELS.get(result.stage, (result.stage, result.stage))
-        st.write(f"Matched via / মিলের ধরন: **{stage_en} · {stage_bn}**")
-        st.write(f"Match confidence / মিলের মাত্রা: **{result.similarity:.3f}**")
-
+        
+        st.markdown(f"""
+        <div class="apparatus-panel">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <span style="font-weight: 600; color: var(--text-bright);">Apparatus</span>
+                <span style="color: var(--text-muted); font-size: 0.78rem;">মিলের বিবরণ</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Match Stage</span>
+                <span class="stat-value">
+                    <span class="stage-badge">{stage_icon} {stage_en}</span>
+                </span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Match Confidence</span>
+                <span class="stat-value">{result.similarity:.3f}</span>
+            </div>
+            <div class="confidence-bar">
+                <div class="fill" style="width: {result.similarity * 100}%;"></div>
+            </div>
+        """, unsafe_allow_html=True)
+        
         # Classifier confirmation
         pred, probs = classify_query(str(row["question_en"] or row["question_bn"]), vectorizer, classifier)
         if pred is not None and probs is not None:
-            agree_en = "agrees" if pred == row["tier1_class"] else "disagrees"
-            agree_bn = "মিলছে" if pred == row["tier1_class"] else "মিলছে না"
+            agree = pred == row["tier1_class"]
+            agree_text = "✓ Agrees" if agree else "✗ Disagrees"
+            agree_bn = "মিলছে" if agree else "মিলছে না"
             confidence = float(probs[np.argmax(probs)])
-            st.write(
-                f"Classifier's independent prediction / মডেলের পৃথক পূর্বাভাস: "
-                f"**{pred.replace('_', ' ')}** ({agree_en} · {agree_bn})  —  "
-                f"Confidence: {confidence:.2%}"
-            )
+            agree_class = "agrees" if agree else "disagrees"
+            
+            st.markdown(f"""
+            <div class="stat-row">
+                <span class="stat-label">Classifier Prediction</span>
+                <span class="stat-value">{pred.replace('_', ' ')}</span>
+            </div>
+            <div class="classifier-result {agree_class}">
+                <span>{agree_text} · {agree_bn}</span>
+                <span style="margin-left: auto; font-weight: 600;">{confidence:.1%}</span>
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            st.write(
-                "Classifier confirmation unavailable / মডেলের নিশ্চিতকরণ পাওয়া যায়নি "
-                "(not enough training data yet / এখনও পর্যাপ্ত প্রশিক্ষণ তথ্য নেই)."
-            )
+            st.markdown("""
+            <div class="stat-row">
+                <span class="stat-label">Classifier</span>
+                <span class="stat-value" style="color: var(--text-muted);">Unavailable</span>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_no_match(result: RetrievalResult) -> None:
-    st.markdown('<div class="no-match-box">', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="no-match-heading">{bilingual_block("No confident match in the reference set.", "নির্ভরযোগ্য কোনো মিল পাওয়া যায়নি।")}</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f'<div class="no-match-body">{bilingual_block("Try different wording, or open one of the closest entries below.", "অন্যভাবে লিখে চেষ্টা করুন, অথবা নিচের কাছাকাছি এন্ট্রিগুলো দেখুন।")}</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="no-match-box">
+        <div class="no-match-heading">{bilingual_block("No confident match in the reference set.", "নির্ভরযোগ্য কোনো মিল পাওয়া যায়নি।")}</div>
+        <div class="no-match-body">{bilingual_block("Try different wording, or open one of the closest entries below.", "অন্যভাবে লিখে চেষ্টা করুন, অথবা নিচের কাছাকাছি এন্ট্রিগুলো দেখুন।")}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
     if result.suggestions:
         st.markdown(
@@ -797,24 +1011,23 @@ def render_browse_mode(df: pd.DataFrame) -> None:
         unsafe_allow_html=True,
     )
 
-    for _, row in filtered.iterrows():
-        st.markdown('<div class="entry">', unsafe_allow_html=True)
-        st.markdown(f'<div class="entry-refno">Ref. No. {int(row["id"]):04d}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="entry-question">{row["question_en"] or row["question_bn"]}</div>', unsafe_allow_html=True)
-        tier1 = str(row["tier1_class"])
-        label = tier1.replace("_", " ")
-        label_bn = TIER1_CLASS_BN.get(tier1, "")
-        strictness = str(row.get("strictness_label", "")).strip()
-        label_text = f"{label} — {strictness}" if strictness else label
-        st.markdown(
-            f'<div class="category-label"><span class="category-mark">{SECTION_MARK}</span>{label_text}'
-            f'<span class="bn-inline"> · {label_bn}</span></div>',
-            unsafe_allow_html=True,
-        )
-        explanation = _explanation_for(row)
-        if explanation:
-            st.markdown(f'<div class="explanation-text">{explanation}</div>', unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+    # Grid layout for browse
+    cols = st.columns(2)
+    for idx, (_, row) in enumerate(filtered.iterrows()):
+        with cols[idx % 2]:
+            tier1 = str(row["tier1_class"])
+            color = TIER1_COLORS.get(tier1, "#D4AF37")
+            st.markdown(f"""
+            <div class="entry" style="padding: 1rem;">
+                <div class="entry-refno">Ref. No. {int(row["id"]):04d}</div>
+                <div class="entry-question" style="font-size: 1rem;">{row["question_en"] or row["question_bn"]}</div>
+                <div class="category-label" style="border-left-color: {color}; font-size: 0.7rem; margin: 0.4rem 0;">
+                    <span class="category-mark">{SECTION_MARK}</span>
+                    {tier1.replace('_', ' ')}
+                    <span class="bn-inline"> · {TIER1_CLASS_BN.get(tier1, '')}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -822,39 +1035,66 @@ def render_browse_mode(df: pd.DataFrame) -> None:
 # --------------------------------------------------------------------------- #
 
 def render_ml_details(df: pd.DataFrame, vectorizer, classifier, X) -> None:
-    with st.expander(bilingual("ML Model Details · মেশিন লার্নিং মডেলের বিবরণ", "For teacher presentation · শিক্ষক উপস্থাপনার জন্য"), expanded=False):
-        st.markdown("### Retrieval Pipeline · অনুসন্ধান প্রক্রিয়া")
+    with st.expander("ML Model Details · মেশিন লার্নিং মডেলের বিবরণ · For teacher presentation · শিক্ষক উপস্থাপনার জন্য", expanded=False):
+        st.markdown("### 🔍 Retrieval Pipeline · অনুসন্ধান প্রক্রিয়া")
 
-        st.markdown("""
-        **Stage 1: Exact Match** — Substring match + token matching with synonym expansion from `search_keywords`.  
-        **Stage 2: TF-IDF + Cosine Similarity** — Threshold: 0.30.  
-        **Stage 3: Fuzzy String Matching** — difflib ratio ≥ 0.55.  
-        **No-Match**: Shows top 5 closest entries as suggestions.
-        """)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("""
+            **Stage 1: Exact Match** 🎯
+            - Substring match
+            - Token matching
+            - Synonym expansion
+            """)
+        with col2:
+            st.markdown("""
+            **Stage 2: TF-IDF + Cosine** 📊
+            - Similarity threshold: 0.30
+            - Character n-grams (3-5)
+            - Max features: 20000
+            """)
+        with col3:
+            st.markdown("""
+            **Stage 3: Fuzzy Match** 🔍
+            - difflib ratio ≥ 0.55
+            - Last resort before no-match
+            - Shows top 5 suggestions
+            """)
 
-        st.markdown("### ML Classification · শ্রেণীবিভাগ")
+        st.markdown("### 🤖 ML Classification · শ্রেণীবিভাগ")
 
-        st.markdown("""
-        **TF-IDF Vectorization**: `char_wb` analyzer, `ngram_range=(3,5)`, `max_features=20000`.  
-        **Character n-grams**: Better for Bangla morphology than word-level tokens.  
-        **Logistic Regression**: Multi-class with softmax, `max_iter=2000`.  
-        **Training labels**: 7 tier1_class categories.
-        """)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("""
+            **TF-IDF Vectorization**
+            - `analyzer`: char_wb
+            - `ngram_range`: (3, 5)
+            - `max_features`: 20000
+            - Character n-grams for Bangla morphology
+            """)
+        with col2:
+            st.markdown("""
+            **Logistic Regression**
+            - Multi-class with softmax
+            - `max_iter`: 2000
+            - 7 tier1_class categories
+            - Independent confirmation signal
+            """)
 
-        st.markdown("### Model Performance · মডেলের কর্মক্ষমতা")
+        st.markdown("### 📊 Model Performance · মডেলের কর্মক্ষমতা")
 
         try:
             y_true = df["tier1_class"]
             y_pred = classifier.predict(X)
             acc = accuracy_score(y_true, y_pred)
 
-            st.write(f"**Accuracy**: {acc:.2%}")
+            st.metric("Accuracy", f"{acc:.2%}")
 
             # Per-class metrics
             report = classification_report(y_true, y_pred, output_dict=True)
             report_df = pd.DataFrame(report).transpose()
             report_df = report_df.round(3)
-            st.dataframe(report_df)
+            st.dataframe(report_df, use_container_width=True)
 
             # Confusion matrix - only if plotly is available
             if PLOTLY_AVAILABLE:
@@ -878,24 +1118,34 @@ def render_ml_details(df: pd.DataFrame, vectorizer, classifier, X) -> None:
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.write("Plotly not available. Install plotly to see the confusion matrix visualization.")
+                st.info("Install plotly to see the confusion matrix visualization.")
 
-            # Cross-validation note
             st.markdown("""
-            **5-fold Cross-Validation** (performed during model development) showed stable performance across folds, confirming the model generalizes well.
+            **5-fold Cross-Validation** showed stable performance across folds, confirming the model generalizes well.
             """)
 
         except Exception as e:
-            st.write(f"Performance metrics not available — classifier may not be fully trained on this dataset yet. Error: {str(e)}")
+            st.warning(f"Performance metrics not available. Error: {str(e)}")
 
-        st.markdown("### Why Retrieval-First + ML-Second · কেন এই আর্কিটেকচার")
+        st.markdown("### 🏗️ Architecture: Retrieval-First + ML-Second")
 
-        st.markdown("""
-        - **Retrieval** gives exact, traceable answers from the verified dataset.  
-        - **ML** provides an independent confirmation signal.  
-        - Retrieval errors are explainable; ML errors are probabilistic.  
-        - This hybrid approach is more trustworthy for religious rulings.
-        """)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("""
+            **Why Retrieval-First?**
+            - Exact, traceable answers
+            - Verified dataset source
+            - Explainable results
+            - Trustworthy for rulings
+            """)
+        with col2:
+            st.markdown("""
+            **Why ML-Second?**
+            - Independent confirmation
+            - Probabilistic validation
+            - Catches retrieval edge cases
+            - Hybrid = more trustworthy
+            """)
 
 
 # --------------------------------------------------------------------------- #
@@ -903,7 +1153,7 @@ def render_ml_details(df: pd.DataFrame, vectorizer, classifier, X) -> None:
 # --------------------------------------------------------------------------- #
 
 def main() -> None:
-    st.set_page_config(page_title="Islamic Ruling Reference · মাসআলা অনুসন্ধান", layout="centered")
+    st.set_page_config(page_title="Islamic Ruling Reference · মাসআলা অনুসন্ধান", layout="wide")
     inject_css()
 
     # HSTU Watermark
@@ -916,6 +1166,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    # Header
     st.markdown(
         f'<div class="app-eyebrow">{bilingual("A reference collection of verified rulings", "যাচাইকৃত মাসআলার একটি সংকলন")}</div>',
         unsafe_allow_html=True,
@@ -928,7 +1179,6 @@ def main() -> None:
         f'<div class="app-subtitle">{bilingual_block("Search in Bangla, English, or Banglish — every entry traces to a cited source.", "বাংলা, ইংরেজি অথবা বাংলিশে খুঁজুন — প্রতিটি ফলাফলের সাথে যাচাইযোগ্য তথ্যসূত্র দেওয়া আছে।")}</div>',
         unsafe_allow_html=True,
     )
-    st.markdown('<hr class="app-rule" />', unsafe_allow_html=True)
 
     try:
         df = load_dataset(DATA_PATH)
@@ -942,31 +1192,41 @@ def main() -> None:
         st.error(f"The app couldn't start up: {exc}")
         st.stop()
 
+    # Mode toggle with styling
     mode = st.radio(
         "Mode",
-        ["Search · খুঁজুন", "Browse · সবগুলো দেখুন"],
+        ["🔍 Search · খুঁজুন", "📚 Browse · সবগুলো দেখুন"],
         horizontal=True,
         label_visibility="collapsed",
     )
 
-    if mode.startswith("Search"):
-        st.markdown(
-            f'<div class="field-label">{bilingual("Type your question", "আপনার প্রশ্ন লিখুন")}</div>',
-            unsafe_allow_html=True,
-        )
-        default_query = st.session_state.pop("pending_query", "")
-        query = st.text_input(
-            "Search",
-            value=default_query,
-            placeholder="namaj pora ki · is riba haram · বিয়ে করা কি সুন্নত…",
-            label_visibility="collapsed",
-        )
-        if query.strip():
-            result = retrieve_candidates(query, df, vectorizer, X, banglish_map)
-            if result.row is not None:
-                render_result(result, df, vectorizer, classifier)
-            else:
-                render_no_match(result)
+    if mode.startswith("🔍 Search"):
+        # Search container with button
+        st.markdown(f'<div class="field-label">{bilingual("Type your question", "আপনার প্রশ্ন লিখুন")}</div>', unsafe_allow_html=True)
+        
+        col_search, col_button = st.columns([5, 1])
+        with col_search:
+            default_query = st.session_state.pop("pending_query", "")
+            query = st.text_input(
+                "Search",
+                value=default_query,
+                placeholder="namaj pora ki · is riba haram · বিয়ে করা কি সুন্নত…",
+                label_visibility="collapsed",
+            )
+        with col_button:
+            st.markdown("<br>", unsafe_allow_html=True)  # spacing
+            search_clicked = st.button("🔍 Search", use_container_width=True)
+        
+        # Trigger search on enter or button click
+        if query.strip() or search_clicked:
+            if query.strip():
+                result = retrieve_candidates(query, df, vectorizer, X, banglish_map)
+                if result.row is not None:
+                    render_result(result, df, vectorizer, classifier)
+                else:
+                    render_no_match(result)
+            elif search_clicked and not query.strip():
+                st.info("Please type a question to search.")
     else:
         render_browse_mode(df)
 
