@@ -1,8 +1,7 @@
 """
 app.py — Islamic Ruling Reference (CSE 469 Capstone)
+Bilingual UI (English + Bangla)
 Retrieval-first search over dataset.csv
-(exact → TF-IDF cosine → fuzzy → honest no-match)
-Logistic Regression is used only as a secondary confirmation signal.
 """
 
 from __future__ import annotations
@@ -29,7 +28,6 @@ TFIDF_SIMILARITY_THRESHOLD: float = 0.30
 FUZZY_MATCH_THRESHOLD: float = 0.55
 TOP_K_SUGGESTIONS: int = 5
 TOP_K_RELATED: int = 4
-MIN_QUERY_LEN_FOR_EXACT: int = 2
 MEANINGFUL_TOKEN_MIN_LEN: int = 3
 
 REQUIRED_COLUMNS = [
@@ -80,20 +78,20 @@ def load_dataset(path: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(path)
     except FileNotFoundError:
-        raise DatasetError(f"Couldn't find '{path}'. Place dataset.csv in the same folder as app.py.")
+        raise DatasetError(f"'{path}' ফাইল পাওয়া যায়নি। app.py এর সাথে একই ফোল্ডারে dataset.csv রাখুন।")
     except Exception as exc:
-        raise DatasetError(f"Couldn't read '{path}': {exc}")
+        raise DatasetError(f"'{path}' পড়া যায়নি: {exc}")
 
     if df.empty:
-        raise DatasetError(f"'{path}' was found but contains no rows.")
+        raise DatasetError(f"'{path}' ফাইলে কোনো ডেটা নেই।")
 
     missing_cols = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing_cols:
-        raise DatasetError("dataset.csv is missing required column(s): " + ", ".join(missing_cols))
+        raise DatasetError("dataset.csv এ প্রয়োজনীয় কলাম নেই: " + ", ".join(missing_cols))
 
     df = df.dropna(subset=["question_bn", "tier1_class"]).reset_index(drop=True)
     if df.empty:
-        raise DatasetError("Every row is missing question_bn and/or tier1_class.")
+        raise DatasetError("সব সারিতে question_bn অথবা tier1_class অনুপস্থিত।")
     return df
 
 def clean_text(text: str) -> str:
@@ -139,7 +137,7 @@ def normalize_query(query: str, banglish_map: dict[str, set[str]]) -> str:
 # --------------------------------------------------------------------------- #
 # CLASSIFIER
 # --------------------------------------------------------------------------- #
-@st.cache_resource(show_spinner="Preparing search index...")
+@st.cache_resource(show_spinner="সার্চ ইনডেক্স প্রস্তুত হচ্ছে... / Preparing search index...")
 def train_classifier(df: pd.DataFrame):
     df = build_combined_text(df)
     vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=1, max_features=20000)
@@ -184,7 +182,7 @@ def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame
         return df.loc[hit_counts.idxmax()]
     return None
 
-def _tfidf_match(query_clean: str, df: pd.DataFrame, vectorizer, X) -> tuple[Optional[pd.Series], float]:
+def _tfidf_match(query_clean: str, df: pd.DataFrame, vectorizer, X):
     if not query_clean.strip():
         return None, 0.0
     q_vec = vectorizer.transform([query_clean])
@@ -195,7 +193,7 @@ def _tfidf_match(query_clean: str, df: pd.DataFrame, vectorizer, X) -> tuple[Opt
         return df.iloc[best_idx], best_score
     return None, best_score
 
-def _fuzzy_match(query_clean: str, df: pd.DataFrame) -> tuple[Optional[pd.Series], float]:
+def _fuzzy_match(query_clean: str, df: pd.DataFrame):
     if not query_clean.strip():
         return None, 0.0
     texts = df["combined_text_clean"].tolist()
@@ -242,22 +240,22 @@ def classify_query(query: str, vectorizer, classifier) -> Optional[str]:
     return classifier.predict(q_vec)[0]
 
 # --------------------------------------------------------------------------- #
-# UI — PROFESSIONAL STYLE
+# UI STYLE - High readability + Bilingual
 # --------------------------------------------------------------------------- #
 def inject_css() -> None:
     st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=Inter:wght@400;500;600&family=Noto+Sans+Bengali:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&family=Noto+Serif+Bengali:wght@500;600&family=Inter:wght@400;500;600&display=swap');
 
     html, body, [class*="css"] {
         background-color: #F7F4EF !important;
         color: #1C1C1C;
-        font-family: 'Inter', 'Noto Sans Bengali', sans-serif;
+        font-family: 'Noto Sans Bengali', 'Inter', sans-serif;
     }
 
     .block-container {
-        max-width: 780px;
-        padding-top: 2.8rem;
+        max-width: 820px;
+        padding-top: 2.5rem;
         padding-bottom: 4rem;
     }
 
@@ -265,55 +263,49 @@ def inject_css() -> None:
 
     /* Title */
     .app-title {
-        font-family: 'Playfair Display', Georgia, serif;
-        font-size: 2.1rem;
+        font-family: 'Noto Serif Bengali', Georgia, serif;
+        font-size: 1.9rem;
         font-weight: 600;
         color: #1C1C1C;
-        margin-bottom: 0.25rem;
-        letter-spacing: -0.02em;
+        margin-bottom: 0.3rem;
+        line-height: 1.35;
     }
 
     .app-subtitle {
         font-size: 0.98rem;
-        color: #5C5C5C;
-        margin-bottom: 2.2rem;
-        line-height: 1.5;
+        color: #4A4A4A;
+        margin-bottom: 2rem;
+        line-height: 1.55;
     }
 
-    /* Search input */
+    /* Search box */
     div[data-testid="stTextInput"] input {
-        background-color: #FFFFFF;
-        border: 1px solid #E2DDD4;
-        border-radius: 8px;
-        color: #1C1C1C;
-        font-size: 1.05rem;
-        padding: 0.85rem 1.1rem;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+        background-color: #FFFFFF !important;
+        border: 1px solid #D9D2C5 !important;
+        border-radius: 8px !important;
+        color: #1C1C1C !important;
+        font-size: 1.05rem !important;
+        padding: 0.85rem 1.1rem !important;
     }
 
     div[data-testid="stTextInput"] input:focus {
-        border-color: #3D5A5B;
-        box-shadow: 0 0 0 3px rgba(61, 90, 91, 0.12);
-    }
-
-    /* Radio buttons */
-    .stRadio > div {
-        gap: 1.5rem;
+        border-color: #3D5A5B !important;
+        box-shadow: 0 0 0 3px rgba(61, 90, 91, 0.15) !important;
     }
 
     /* Result Card */
     .result-card {
         background: #FFFFFF;
-        border: 1px solid #E8E2D9;
+        border: 1px solid #E5DFD3;
         border-radius: 10px;
-        padding: 1.75rem 1.9rem;
-        margin-top: 1.5rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+        padding: 1.7rem 1.8rem;
+        margin-top: 1.4rem;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
     }
 
     .result-question-bn {
         font-family: 'Noto Sans Bengali', sans-serif;
-        font-size: 1.25rem;
+        font-size: 1.28rem;
         font-weight: 600;
         color: #1C1C1C;
         margin-bottom: 0.35rem;
@@ -322,95 +314,93 @@ def inject_css() -> None:
 
     .result-question-en {
         font-size: 1.05rem;
-        color: #444444;
+        color: #333333;
         margin-bottom: 1.1rem;
         line-height: 1.45;
     }
 
     .category-label {
         display: inline-block;
-        font-size: 0.72rem;
+        font-size: 0.75rem;
         font-weight: 600;
-        letter-spacing: 0.12em;
+        letter-spacing: 0.10em;
         text-transform: uppercase;
         color: #3D5A5B;
         border-left: 3.5px solid #3D5A5B;
         padding: 0.2rem 0 0.2rem 0.7rem;
-        margin-bottom: 1.1rem;
+        margin-bottom: 1rem;
     }
 
     .explanation-text {
         font-size: 0.98rem;
-        line-height: 1.65;
-        color: #2A2A2A;
-        margin-bottom: 1.3rem;
+        line-height: 1.7;
+        color: #222222;
+        margin-bottom: 1.2rem;
     }
 
     .citation-block {
-        background: #F8F5F0;
+        background: #F3EFE7;
         border-left: 3px solid #3D5A5B;
-        padding: 0.9rem 1.1rem;
+        padding: 0.9rem 1.15rem;
         border-radius: 0 6px 6px 0;
-        font-size: 0.9rem;
-        color: #3A3A3A;
+        font-size: 0.92rem;
+        color: #333333;
         margin-bottom: 0.8rem;
+        line-height: 1.55;
     }
 
     .verification-flag {
         display: inline-block;
-        font-size: 0.75rem;
+        font-size: 0.78rem;
         font-weight: 500;
-        color: #8B5A2B;
-        background: #F8EFE0;
-        border: 1px solid #E8D5B5;
+        color: #7A4F1D;
+        background: #F8EFDF;
+        border: 1px solid #E5D3B0;
         border-radius: 4px;
-        padding: 0.2rem 0.55rem;
+        padding: 0.22rem 0.6rem;
         margin-bottom: 0.9rem;
     }
 
     .related-title {
-        font-size: 0.85rem;
+        font-size: 0.84rem;
         font-weight: 600;
-        color: #5C5C5C;
+        color: #555555;
         margin-top: 1.3rem;
-        margin-bottom: 0.5rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
+        margin-bottom: 0.45rem;
+        letter-spacing: 0.04em;
     }
 
     .related-item {
-        font-size: 0.92rem;
+        font-size: 0.93rem;
         color: #3D5A5B;
         padding: 0.35rem 0;
-        border-bottom: 1px solid #F0EBE3;
+        border-bottom: 1px solid #EFEBE3;
     }
 
-    /* No match */
     .no-match-box {
         background: #FFFFFF;
-        border: 1px dashed #D8D0C4;
+        border: 1px dashed #D0C8B8;
         border-radius: 10px;
-        padding: 1.6rem 1.8rem;
-        margin-top: 1.5rem;
-        color: #4A4A4A;
+        padding: 1.6rem 1.7rem;
+        margin-top: 1.4rem;
+        color: #333333;
+        line-height: 1.6;
     }
 
-    /* Footer */
     .app-footer {
         margin-top: 3.5rem;
         padding-top: 1.2rem;
-        border-top: 1px solid #E2DDD4;
-        color: #7A7A7A;
-        font-size: 0.8rem;
+        border-top: 1px solid #E0D9CC;
+        color: #666666;
+        font-size: 0.82rem;
         text-align: center;
-        line-height: 1.5;
+        line-height: 1.6;
     }
 
-    /* Mobile */
     @media (max-width: 480px) {
-        .block-container { padding-left: 1.1rem; padding-right: 1.1rem; }
-        .app-title { font-size: 1.7rem; }
-        .result-card { padding: 1.3rem 1.3rem; }
+        .block-container { padding-left: 1rem; padding-right: 1rem; }
+        .app-title { font-size: 1.55rem; }
+        .result-card { padding: 1.3rem; }
     }
     </style>
     """, unsafe_allow_html=True)
@@ -424,79 +414,105 @@ def _explanation_for(row: pd.Series) -> str:
         parts.append(str(row["short_explanation_bn"]).strip())
     if str(row.get("short_explanation_en", "")).strip():
         parts.append(str(row["short_explanation_en"]).strip())
-    return " ".join(parts)
+    return "<br><br>".join(parts)
 
 def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classifier) -> None:
     row = result.row
 
     st.markdown('<div class="result-card">', unsafe_allow_html=True)
 
+    # Question
     st.markdown(f'<div class="result-question-bn">{row["question_bn"]}</div>', unsafe_allow_html=True)
     if str(row.get("question_en", "")).strip():
         st.markdown(f'<div class="result-question-en">{row["question_en"]}</div>', unsafe_allow_html=True)
 
+    # Category
     label = str(row["tier1_class"]).replace("_", " ")
     strictness = str(row.get("strictness_label", "")).strip()
     label_text = f"{label}  ·  {strictness}" if strictness else label
     st.markdown(f'<div class="category-label">{label_text}</div>', unsafe_allow_html=True)
 
+    # Verification warning
     if str(row.get("verification_status", "")).strip() == NEEDS_VERIFICATION_LABEL:
         st.markdown(
-            '<div class="verification-flag">Unverified reference — pending scholarly check</div>',
+            '<div class="verification-flag">'
+            '⚠ Unverified reference — pending scholarly check<br>'
+            '<span style="font-size:0.75rem;">অযাচাইকৃত রেফারেন্স — স্কলারলি যাচাইয়ের অপেক্ষায়</span>'
+            '</div>',
             unsafe_allow_html=True,
         )
 
+    # Explanation
     explanation = _explanation_for(row)
     if explanation:
         st.markdown(f'<div class="explanation-text">{explanation}</div>', unsafe_allow_html=True)
 
+    # Citation
     ref_text = str(row.get("reference_text", "")).strip()
     ref_source = str(row.get("reference_source", "")).strip()
     if ref_text == PLACEHOLDER_REFERENCE_TEXT or not ref_text:
         citation = ref_source
     else:
-        citation = f"{ref_text} — {ref_source}"
+        citation = f"{ref_text}<br>{ref_source}"
 
-    st.markdown(f'<div class="citation-block"><strong>Reference</strong><br>{citation}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="citation-block">'
+        f'<strong>Reference / রেফারেন্স</strong><br>{citation}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
+    # Related
     related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
     if not related.empty:
-        st.markdown('<div class="related-title">Related rulings</div>', unsafe_allow_html=True)
+        st.markdown('<div class="related-title">Related Rulings / সম্পর্কিত মাসআলা</div>', unsafe_allow_html=True)
         for _, r in related.iterrows():
             st.markdown(
-                f'<div class="related-item">{r["question_en"] or r["question_bn"]}</div>',
+                f'<div class="related-item">{r["question_bn"]}<br>'
+                f'<span style="color:#555; font-size:0.88rem;">{r["question_en"]}</span></div>',
                 unsafe_allow_html=True,
             )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    with st.expander("Technical details"):
+    # Technical details
+    with st.expander("Technical Details / প্রযুক্তিগত বিবরণ"):
         stage_labels = {
-            "exact_match": "Exact / substring match",
-            "tfidf_cosine": "TF-IDF + cosine similarity",
-            "fuzzy_match": "Fuzzy text match",
+            "exact_match": "Exact / Substring Match",
+            "tfidf_cosine": "TF-IDF + Cosine Similarity",
+            "fuzzy_match": "Fuzzy Text Match",
         }
-        st.write(f"**Matched via:** {stage_labels.get(result.stage, result.stage)}")
-        st.write(f"**Similarity score:** {result.similarity:.3f}")
+        st.write(f"**Matched via / ম্যাচ হয়েছে:** {stage_labels.get(result.stage, result.stage)}")
+        st.write(f"**Similarity Score:** {result.similarity:.3f}")
 
         predicted = classify_query(str(row["question_en"] or row["question_bn"]), vectorizer, classifier)
         if predicted:
             agree = "agrees" if predicted == row["tier1_class"] else "disagrees"
-            st.write(f"**Classifier prediction:** {predicted.replace('_', ' ')} ({agree} with retrieved row)")
+            st.write(f"**Classifier Prediction:** {predicted.replace('_', ' ')} ({agree})")
         else:
             st.write("Classifier confirmation unavailable.")
 
 def render_no_match(result: RetrievalResult) -> None:
     st.markdown('<div class="no-match-box">', unsafe_allow_html=True)
-    st.markdown("**No confident match found**")
-    st.markdown("The question did not closely match any verified entry. Here are the closest suggestions:")
-    st.markdown("")
+    st.markdown(
+        "<strong>No confident match found</strong><br>"
+        "<span style='color:#444;'>কোনো নিশ্চিত ম্যাচ পাওয়া যায়নি</span>"
+    )
+    st.markdown(
+        "<br>The question did not closely match any verified entry.<br>"
+        "আপনার প্রশ্নটি কোনো যাচাইকৃত এন্ট্রির সাথে ভালোভাবে মিলেনি।"
+    )
 
     if result.suggestions:
+        st.markdown("<br><strong>Closest suggestions / নিকটতম সাজেশন:</strong>")
         for r in result.suggestions:
             label = str(r["tier1_class"]).replace("_", " ")
             st.markdown(
-                f'<div class="related-item"><strong>{label}</strong> — {r["question_en"] or r["question_bn"]}</div>',
+                f'<div class="related-item">'
+                f'<strong>{label}</strong><br>'
+                f'{r["question_bn"]}<br>'
+                f'<span style="color:#555; font-size:0.9rem;">{r["question_en"]}</span>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
     st.markdown('</div>', unsafe_allow_html=True)
@@ -504,17 +520,26 @@ def render_no_match(result: RetrievalResult) -> None:
 def render_browse_mode(df: pd.DataFrame) -> None:
     col1, col2 = st.columns(2)
     with col1:
-        topic_filter = st.selectbox("Topic", ["All"] + sorted(df["topic"].dropna().unique().tolist()))
+        topic_filter = st.selectbox(
+            "Topic / বিষয়",
+            ["All / সব"] + sorted(df["topic"].dropna().unique().tolist())
+        )
     with col2:
-        class_filter = st.selectbox("Category", ["All"] + sorted(df["tier1_class"].dropna().unique().tolist()))
+        class_filter = st.selectbox(
+            "Category / শ্রেণী",
+            ["All / সব"] + sorted(df["tier1_class"].dropna().unique().tolist())
+        )
 
     filtered = df.copy()
-    if topic_filter != "All":
+    if not topic_filter.startswith("All"):
         filtered = filtered[filtered["topic"] == topic_filter]
-    if class_filter != "All":
+    if not class_filter.startswith("All"):
         filtered = filtered[filtered["tier1_class"] == class_filter]
 
-    st.markdown(f"<div class='app-subtitle'>{len(filtered)} entries</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='app-subtitle'>{len(filtered)} entries found / {len(filtered)} টি এন্ট্রি পাওয়া গেছে</div>",
+        unsafe_allow_html=True,
+    )
 
     for _, row in filtered.head(40).iterrows():
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
@@ -535,16 +560,26 @@ def render_browse_mode(df: pd.DataFrame) -> None:
 # --------------------------------------------------------------------------- #
 def main() -> None:
     st.set_page_config(
-        page_title="Islamic Ruling Reference",
+        page_title="Islamic Ruling Reference | ইসলামী মাসআলা রেফারেন্স",
         page_icon=None,
         layout="centered",
         initial_sidebar_state="collapsed",
     )
     inject_css()
 
-    st.markdown('<div class="app-title">Islamic Ruling Reference</div>', unsafe_allow_html=True)
+    # Header - Bilingual
     st.markdown(
-        '<div class="app-subtitle">Search verified rulings in Bangla, English, or Banglish</div>',
+        '<div class="app-title">'
+        'Islamic Ruling Reference<br>'
+        '<span style="font-size:1.45rem;">ইসলামী মাসআলা রেফারেন্স</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="app-subtitle">'
+        'Search verified rulings in Bangla, English or Banglish<br>'
+        '<span style="font-size:0.92rem;">বাংলা, ইংরেজি বা বাংলিশে যাচাইকৃত মাসআলা খুঁজুন</span>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -557,12 +592,17 @@ def main() -> None:
         st.error(str(exc))
         st.stop()
     except Exception as exc:
-        st.error(f"The app could not start: {exc}")
+        st.error(f"অ্যাপ শুরু করা যায়নি / App could not start: {exc}")
         st.stop()
 
-    mode = st.radio("Mode", ["Search", "Browse"], horizontal=True, label_visibility="collapsed")
+    mode = st.radio(
+        "Mode",
+        ["Search / খুঁজুন", "Browse / ব্রাউজ করুন"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-    if mode == "Search":
+    if mode.startswith("Search"):
         query = st.text_input(
             "Search",
             placeholder="উদাহরণ: নামাজ কি ফরজ?  /  is riba haram  /  biye kora ki sunnat",
@@ -578,10 +618,12 @@ def main() -> None:
     else:
         render_browse_mode(df)
 
+    # Footer
     st.markdown(
         '<div class="app-footer">'
-        "Educational reference only. For personal or complex matters, please consult a qualified scholar."
-        "</div>",
+        'Educational reference only. For personal or complex matters, consult a qualified scholar.<br>'
+        'শুধুমাত্র শিক্ষামূলক রেফারেন্স। ব্যক্তিগত বা জটিল বিষয়ে যোগ্য আলেমের সাথে পরামর্শ করুন।'
+        '</div>',
         unsafe_allow_html=True,
     )
 
