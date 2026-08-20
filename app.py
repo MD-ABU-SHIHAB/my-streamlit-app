@@ -91,6 +91,9 @@ PLACEHOLDER_REFERENCE_TEXT = "SEE_REFERENCE_SOURCE"
 # Mus'haf pages to divide sections, which is why it belongs here.
 SECTION_MARK = "\u06de"  # ۞
 
+# HSTU logo URL for watermark
+HSTU_LOGO_URL = "https://hstu.ac.bd/img/hstu_logo_.png"
+
 STAGE_LABELS = {
     "exact_match": ("Exact match", "সরাসরি মিল"),
     "tfidf_cosine": ("TF-IDF · cosine similarity", "শব্দ-সাদৃশ্য বিশ্লেষণ"),
@@ -399,33 +402,28 @@ def classify_query(query: str, vectorizer, classifier) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 # UI — DESIGN TOKENS & STYLE
 #
-# Direction: a hushed reading-room / critical-edition aesthetic. The subject
-# is a reference library of verified rulings, so retrieval metadata (match
-# stage, score, classifier agreement) is treated like a scholarly edition's
-# critical apparatus — small, typographic, in the margin — rather than a
-# dashboard with progress bars. Category identity is a single accent color
-# plus label text, never a badge palette per category. The one deliberate
-# "signature" touch is the rub' el hizb mark (۞) — the real section-divider
-# glyph used in printed Qur'an pages — and a catalog-style reference number
-# on each entry, both grounded in the subject rather than decorative.
+# Direction: Dark, scholarly, high-contrast aesthetic with gold accents.
+# The deep navy background and warm gold evoke a reading-room at night,
+# while the HSTU logo sits as a faint watermark behind the content.
 # --------------------------------------------------------------------------- #
 
 def inject_css() -> None:
     st.markdown(
-        """
+        f"""
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
-        :root {
-            --bg: #1A1A2E;
-            --card: #16213E;
-            --card-hover: #1F2E4A;
-            --text: #EAEAEA;
+        :root {{
+            --bg: #0F0F1A;
+            --card: #1A1A2E;
+            --card-hover: #24243A;
+            --text: #E8E8E8;
             --text-bright: #FFFFFF;
-            --text-muted: #A0A0B0;
+            --text-muted: #9A9AB0;
             --accent: #D4AF37;
-            --accent-soft: #3A3520;
-            --hairline: #2A2A3E;
+            --accent-hover: #C9A030;
+            --accent-soft: #2A2410;
+            --hairline: #2E2E42;
             --flag-bg: #3A2E10;
             --flag-ink: #E0C060;
             --font-display: 'Noto Serif Bengali', Georgia, serif;
@@ -436,89 +434,120 @@ def inject_css() -> None:
             --space-3: 1.4rem;
             --space-4: 2.2rem;
             --space-5: 3.2rem;
-        }
+        }}
 
-        html, body, [class*="css"] {
+        html, body, [class*="css"] {{
             background-color: var(--bg) !important;
             color: var(--text);
             font-family: var(--font-body);
-        }
-        .block-container { max-width: 700px; padding-top: var(--space-4); padding-bottom: var(--space-5); }
-        #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; }
+        }}
 
-        a:focus-visible, button:focus-visible, input:focus-visible {
+        /* ---------- HSTU Logo Watermark Background ---------- */
+        .stApp {{
+            position: relative;
+        }}
+
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 420px;
+            height: 420px;
+            background-image: url('{HSTU_LOGO_URL}');
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            opacity: 0.05;
+            pointer-events: none;
+            z-index: 0;
+        }}
+
+        /* Ensure all content stays above the watermark */
+        .block-container {{
+            position: relative;
+            z-index: 1;
+            max-width: 700px;
+            padding-top: var(--space-4);
+            padding-bottom: var(--space-5);
+        }}
+
+        #MainMenu, header[data-testid="stHeader"], footer {{ visibility: hidden; }}
+
+        a:focus-visible, button:focus-visible, input:focus-visible {{
             outline: 2px solid var(--accent);
             outline-offset: 2px;
-        }
-        @media (prefers-reduced-motion: reduce) {
-            * { animation: none !important; transition: none !important; }
-        }
+        }}
+        @media (prefers-reduced-motion: reduce) {{
+            * {{ animation: none !important; transition: none !important; }}
+        }}
 
         /* ---------- Header ---------- */
-        .app-eyebrow {
+        .app-eyebrow {{
             font-family: var(--font-mono);
             font-size: 0.72rem;
             letter-spacing: 0.22em;
             text-transform: uppercase;
             color: var(--accent);
             margin-bottom: var(--space-1);
-        }
-        .app-title {
+        }}
+        .app-title {{
             font-family: var(--font-display);
             font-weight: 700;
             font-size: 2.1rem;
             color: var(--text-bright);
             margin-bottom: var(--space-1);
             line-height: 1.15;
-        }
-        .app-subtitle {
+        }}
+        .app-subtitle {{
             font-family: var(--font-body);
             color: var(--text-muted);
             font-size: 0.95rem;
-        }
-        .app-rule {
+        }}
+        .app-rule {{
             border: none;
             border-top: 1px solid var(--hairline);
             margin: var(--space-3) 0 var(--space-4) 0;
-        }
+        }}
 
         /* ---------- Bilingual text pattern ---------- */
-        .bn-inline {
+        .bn-inline {{
             font-family: var(--font-body);
             color: var(--text-muted);
-        }
-        .en-line { display: block; color: var(--text); }
-        .bn-line {
+        }}
+        .en-line {{ display: block; color: var(--text); }}
+        .bn-line {{
             display: block;
             color: var(--text-muted);
             margin-top: 0.2rem;
             font-size: 0.97em;
-        }
+        }}
 
         /* ---------- Search ---------- */
-        .field-label {
+        .field-label {{
             font-family: var(--font-body);
             font-size: 0.85rem;
             color: var(--text-muted);
             margin-bottom: 0.35rem;
-        }
-        div[data-testid="stTextInput"] input {
+        }}
+        div[data-testid="stTextInput"] input {{
             background-color: var(--card);
             border: 1px solid var(--hairline);
             border-radius: 3px;
             color: var(--text-bright);
             font-size: 1.08rem;
             padding: 0.85rem 1rem;
-        }
-        div[data-testid="stTextInput"] input:focus {
+        }}
+        div[data-testid="stTextInput"] input:focus {{
             border-color: var(--accent);
             box-shadow: 0 0 0 1px var(--accent);
-        }
-        div[data-testid="stTextInput"] input::placeholder { color: var(--text-muted); opacity: 0.7; }
+        }}
+        div[data-testid="stTextInput"] input::placeholder {{ color: var(--text-muted); opacity: 0.7; }}
 
-        .stButton > button {
+        .stButton > button {{
             background-color: var(--accent);
-            color: #1A1A2E;
+            color: #0F0F1A;
             border: none;
             border-radius: 3px;
             padding: 0.5rem 1.2rem;
@@ -527,53 +556,53 @@ def inject_css() -> None:
             font-size: 0.88rem;
             letter-spacing: 0.02em;
             transition: background-color 120ms ease;
-        }
-        .stButton > button:hover { background-color: #C9A030; color: #1A1A2E; }
+        }}
+        .stButton > button:hover {{ background-color: var(--accent-hover); color: #0F0F1A; }}
 
-        div[role="radiogroup"] { gap: var(--space-3); }
-        div[role="radiogroup"] label {
+        div[role="radiogroup"] {{ gap: var(--space-3); }}
+        div[role="radiogroup"] label {{
             font-family: var(--font-mono);
             font-size: 0.78rem;
             letter-spacing: 0.12em;
             text-transform: uppercase;
             color: var(--text-muted);
-        }
+        }}
 
         /* ---------- Result entry ---------- */
-        @keyframes entryFadeIn {
-            from { opacity: 0; transform: translateY(4px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .entry {
+        @keyframes entryFadeIn {{
+            from {{ opacity: 0; transform: translateY(4px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        .entry {{
             background-color: var(--card);
             border: 1px solid var(--hairline);
             border-radius: 3px;
             padding: var(--space-3) var(--space-3) var(--space-2) var(--space-3);
             margin-top: var(--space-3);
             animation: entryFadeIn 220ms ease-out;
-        }
-        .entry-refno {
+        }}
+        .entry-refno {{
             font-family: var(--font-mono);
             font-size: 0.72rem;
             color: var(--text-muted);
             letter-spacing: 0.05em;
             margin-bottom: var(--space-2);
-        }
-        .entry-question {
+        }}
+        .entry-question {{
             font-family: var(--font-display);
             font-size: 1.2rem;
             font-weight: 600;
             line-height: 1.4;
             margin-bottom: 0.3rem;
             color: var(--text-bright);
-        }
-        .entry-question-en {
+        }}
+        .entry-question-en {{
             font-family: var(--font-body);
             font-size: 0.92rem;
             color: var(--text-muted);
             margin-bottom: var(--space-2);
-        }
-        .category-label {
+        }}
+        .category-label {{
             font-family: var(--font-body);
             font-size: 0.8rem;
             font-weight: 600;
@@ -583,20 +612,20 @@ def inject_css() -> None:
             border-left: 3px solid var(--accent);
             padding: 0.2rem 0 0.2rem 0.65rem;
             margin: var(--space-2) 0 var(--space-3) 0;
-        }
-        .category-mark { color: var(--accent); margin-right: 0.4rem; font-weight: 400; }
+        }}
+        .category-mark {{ color: var(--accent); margin-right: 0.4rem; font-weight: 400; }}
 
-        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: var(--space-2); color: var(--text); }
+        .explanation-text {{ font-size: 0.99rem; line-height: 1.6; margin-bottom: var(--space-2); color: var(--text); }}
 
-        .citation-block {
+        .citation-block {{
             border-left: 2px solid var(--hairline);
             padding: 0.45rem 0 0.45rem 0.85rem;
             color: var(--text-muted);
             font-size: 0.88rem;
             font-style: italic;
             margin-bottom: var(--space-2);
-        }
-        .citation-source {
+        }}
+        .citation-source {{
             display: block;
             font-family: var(--font-mono);
             font-style: normal;
@@ -604,9 +633,9 @@ def inject_css() -> None:
             color: var(--accent);
             margin-top: 0.25rem;
             letter-spacing: 0.02em;
-        }
+        }}
 
-        .verification-flag {
+        .verification-flag {{
             display: inline-block;
             font-family: var(--font-mono);
             font-size: 0.72rem;
@@ -617,9 +646,9 @@ def inject_css() -> None:
             padding: 0.15rem 0.5rem;
             margin-bottom: var(--space-2);
             letter-spacing: 0.02em;
-        }
+        }}
 
-        .related-heading {
+        .related-heading {{
             font-family: var(--font-mono);
             font-size: 0.72rem;
             letter-spacing: 0.14em;
@@ -628,26 +657,26 @@ def inject_css() -> None:
             margin: var(--space-2) 0 0.35rem 0;
             border-top: 1px solid var(--hairline);
             padding-top: var(--space-2);
-        }
+        }}
 
         /* ---------- No-match state ---------- */
-        .no-match-box {
+        .no-match-box {{
             background-color: var(--card);
             border: 1px dashed var(--hairline);
             border-radius: 3px;
             padding: var(--space-3);
             margin-top: var(--space-3);
-        }
-        .no-match-heading {
+        }}
+        .no-match-heading {{
             font-family: var(--font-display);
             font-size: 1.05rem;
             margin-bottom: 0.3rem;
             color: var(--text-bright);
-        }
-        .no-match-body { color: var(--text-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
+        }}
+        .no-match-body {{ color: var(--text-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }}
 
         /* ---------- Clickable list rows (related rulings / suggestions) ---------- */
-        div[data-testid="stButton"] button[kind="secondary"] {
+        div[data-testid="stButton"] button[kind="secondary"] {{
             background-color: transparent;
             color: var(--text);
             border: none;
@@ -659,36 +688,36 @@ def inject_css() -> None:
             font-family: var(--font-body);
             font-weight: 400;
             font-size: 0.92rem;
-        }
-        div[data-testid="stButton"] button[kind="secondary"]:hover {
+        }}
+        div[data-testid="stButton"] button[kind="secondary"]:hover {{
             background-color: var(--card-hover);
             color: var(--text-bright);
-        }
+        }}
 
         /* ---------- Browse mode ---------- */
-        .browse-count {
+        .browse-count {{
             font-family: var(--font-mono);
             font-size: 0.78rem;
             color: var(--text-muted);
             letter-spacing: 0.05em;
             margin: var(--space-2) 0 var(--space-1) 0;
-        }
+        }}
 
         /* ---------- Footer ---------- */
-        .app-footer {
+        .app-footer {{
             margin-top: var(--space-5);
             padding-top: var(--space-2);
             border-top: 1px solid var(--hairline);
             color: var(--text-muted);
             font-size: 0.8rem;
             line-height: 1.5;
-        }
+        }}
 
-        @media (max-width: 480px) {
-            .block-container { padding-left: 1.1rem; padding-right: 1.1rem; }
-            .app-title { font-size: 1.6rem; }
-            .entry { padding: var(--space-2); }
-        }
+        @media (max-width: 480px) {{
+            .block-container {{ padding-left: 1.1rem; padding-right: 1.1rem; }}
+            .app-title {{ font-size: 1.6rem; }}
+            .entry {{ padding: var(--space-2); }}
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -754,7 +783,7 @@ def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classif
     else:
         st.markdown(f'<div class="citation-block"><span class="citation-source">{ref_source}</span></div>', unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)  # close .entry (buttons below can't live inside raw HTML)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
     if not related.empty:
@@ -888,7 +917,7 @@ def main() -> None:
     except DatasetError as exc:
         st.error(str(exc))
         st.stop()
-    except Exception as exc:  # last-resort guard: never show a raw traceback
+    except Exception as exc:
         st.error(f"The app couldn't start up: {exc}")
         st.stop()
 
