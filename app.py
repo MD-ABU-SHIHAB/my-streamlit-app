@@ -19,8 +19,14 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
-import plotly.figure_factory as ff
-import plotly.graph_objects as go
+
+# Plotly is optional - only used for the ML details section
+try:
+    import plotly.figure_factory as ff
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
 
 # --------------------------------------------------------------------------- #
 # CONSTANTS
@@ -850,34 +856,37 @@ def render_ml_details(df: pd.DataFrame, vectorizer, classifier, X) -> None:
             report_df = report_df.round(3)
             st.dataframe(report_df)
 
-            # Confusion matrix
-            cm = confusion_matrix(y_true, y_pred)
-            labels = sorted(y_true.unique())
-            fig = ff.create_annotated_heatmap(
-                z=cm,
-                x=labels,
-                y=labels,
-                colorscale="Reds",
-                showscale=True,
-                font_colors=["white", "black"]
-            )
-            fig.update_layout(
-                title="Confusion Matrix",
-                xaxis_title="Predicted",
-                yaxis_title="True",
-                paper_bgcolor="#1A1A2E",
-                plot_bgcolor="#1A1A2E",
-                font=dict(color="#E8E8E8")
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Confusion matrix - only if plotly is available
+            if PLOTLY_AVAILABLE:
+                cm = confusion_matrix(y_true, y_pred)
+                labels = sorted(y_true.unique())
+                fig = ff.create_annotated_heatmap(
+                    z=cm,
+                    x=labels,
+                    y=labels,
+                    colorscale="Reds",
+                    showscale=True,
+                    font_colors=["white", "black"]
+                )
+                fig.update_layout(
+                    title="Confusion Matrix",
+                    xaxis_title="Predicted",
+                    yaxis_title="True",
+                    paper_bgcolor="#1A1A2E",
+                    plot_bgcolor="#1A1A2E",
+                    font=dict(color="#E8E8E8")
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.write("Plotly not available. Install plotly to see the confusion matrix visualization.")
 
             # Cross-validation note
             st.markdown("""
             **5-fold Cross-Validation** (performed during model development) showed stable performance across folds, confirming the model generalizes well.
             """)
 
-        except Exception:
-            st.write("Performance metrics not available — classifier may not be fully trained on this dataset yet.")
+        except Exception as e:
+            st.write(f"Performance metrics not available — classifier may not be fully trained on this dataset yet. Error: {str(e)}")
 
         st.markdown("### Why Retrieval-First + ML-Second · কেন এই আর্কিটেকচার")
 
