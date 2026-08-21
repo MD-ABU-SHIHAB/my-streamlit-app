@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from difflib import get_close_matches
 from functools import lru_cache
+from pathlib import Path
 import re
 
 import pandas as pd
@@ -26,7 +27,27 @@ REQUIRED_COLUMNS = [
 class HIKMA:
     def __init__(self, dataset_path: str):
         """Load the dataset and build the lookup structures used at query time."""
+        path = Path(dataset_path)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"'{dataset_path}' was not found next to app.py. "
+                "Make sure dataset.csv is committed and pushed to the repo "
+                "(check it isn't excluded by .gitignore)."
+            )
+        if path.stat().st_size == 0:
+            raise ValueError(
+                f"'{dataset_path}' exists but is empty (0 bytes). "
+                "This usually means the file wasn't fully pushed to GitHub — "
+                "re-add and commit it, and confirm it isn't a Git LFS pointer "
+                "if the real file is large."
+            )
+
         self.df = pd.read_csv(dataset_path)
+        if self.df.empty:
+            raise ValueError(
+                f"'{dataset_path}' loaded but contains no rows — "
+                "only a header, or the wrong file was committed."
+            )
         self._validate_columns()
         self._clean_data()
 
@@ -379,10 +400,15 @@ st.markdown(CSS, unsafe_allow_html=True)
 # ---- session state & data ----
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "hikma" not in st.session_state:
-    st.session_state.hikma = HIKMA("dataset.csv")
 if "feedback" not in st.session_state:
     st.session_state.feedback = {}
+
+if "hikma" not in st.session_state:
+    try:
+        st.session_state.hikma = HIKMA("dataset.csv")
+    except Exception as e:
+        st.error(f"⚠️ dataset.csv লোড করা যায়নি:\n\n**{e}**")
+        st.stop()
 
 try:
     df = st.session_state.hikma.df
