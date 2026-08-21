@@ -26,11 +26,20 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
-# IMPORTANT: Set matplotlib backend BEFORE importing pyplot
-import matplotlib
-matplotlib.use("Agg")
+# Try to import matplotlib with Agg backend
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    # Create dummy placeholder so code doesn't break
+    class DummyPlot:
+        def __init__(self, *args, **kwargs):
+            pass
+    plt = DummyPlot()
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -445,6 +454,8 @@ def _cv_k(y: pd.Series, target: int = 5) -> int:
 
 def _style_matplotlib_fig(fig, ax):
     """Apply the app's color palette to a matplotlib figure."""
+    if not MATPLOTLIB_AVAILABLE:
+        return fig, ax
     fig.patch.set_facecolor(COLOR_PAPER)
     ax.set_facecolor(COLOR_PAPER)
     for spine in ax.spines.values():
@@ -674,64 +685,70 @@ def render_model_insights_tab(df: pd.DataFrame, vectorizer_search, X_search, ban
         
         st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
         
-        # Bar chart ranking by F1
-        st.markdown("##### F1 স্কোর দ্বারা র্যাঙ্কিং · Ranking by F1 Score")
-        
-        use_cv = any(r["cv_possible"] for r in valid_results.values())
-        rank_key = "cv_mean_macro_f1" if use_cv else "train_macro_f1"
-        rank_label = "CV Macro-F1" if use_cv else "Train Macro-F1"
-        
-        names = list(valid_results.keys())
-        scores = [valid_results[n][rank_key] if not np.isnan(valid_results[n][rank_key]) else 0 for n in names]
-        
-        sorted_pairs = sorted(zip(names, scores), key=lambda x: x[1], reverse=True)
-        names_sorted, scores_sorted = zip(*sorted_pairs)
-        
-        fig, ax = plt.subplots(figsize=(7, 4))
-        bars = ax.bar(names_sorted, scores_sorted, color=COLOR_ACCENT, edgecolor=COLOR_HAIRLINE)
-        ax.set_ylabel(rank_label)
-        ax.set_ylim(0, 1.05)
-        ax.set_title(f"{rank_label} Ranking", fontsize=12)
-        plt.xticks(rotation=25, ha="right", fontsize=8)
-        
-        for bar, s in zip(bars, scores_sorted):
-            ax.text(bar.get_x() + bar.get_width()/2, s + 0.02, f"{s:.2f}", ha="center", fontsize=8, color=COLOR_INK)
-        
-        fig, ax = _style_matplotlib_fig(fig, ax)
-        st.pyplot(fig)
-        plt.close(fig)
-        
-        # Confusion matrix picker
-        st.markdown("##### কনফিউশন ম্যাট্রিক্স · Confusion Matrix")
-        model_names = list(valid_results.keys())
-        selected_model = st.selectbox(
-            bilingual_plain("Select a model to view its confusion matrix", "কনফিউশন ম্যাট্রিক্স দেখতে একটি মডেল নির্বাচন করুন"),
-            model_names,
-            key="cm_picker"
-        )
-        
-        if selected_model in valid_results:
-            r = valid_results[selected_model]
-            cm = r["confusion_matrix"]
-            classes = r["classes"]
+        # Bar chart ranking by F1 (only if matplotlib is available)
+        if MATPLOTLIB_AVAILABLE:
+            st.markdown("##### F1 স্কোর দ্বারা র্যাঙ্কিং · Ranking by F1 Score")
             
-            fig, ax = plt.subplots(figsize=(6, 5))
-            im = ax.imshow(cm, cmap="Blues")
-            ax.set_xticks(np.arange(len(classes)))
-            ax.set_yticks(np.arange(len(classes)))
-            ax.set_xticklabels([c.replace("_", " ") for c in classes], rotation=45, ha="right", fontsize=7)
-            ax.set_yticklabels([c.replace("_", " ") for c in classes], fontsize=7)
-            ax.set_xlabel("Predicted", fontsize=9)
-            ax.set_ylabel("True", fontsize=9)
-            ax.set_title(f"{selected_model} — Confusion Matrix", fontsize=11)
+            use_cv = any(r["cv_possible"] for r in valid_results.values())
+            rank_key = "cv_mean_macro_f1" if use_cv else "train_macro_f1"
+            rank_label = "CV Macro-F1" if use_cv else "Train Macro-F1"
             
-            for i in range(len(classes)):
-                for j in range(len(classes)):
-                    ax.text(j, i, str(cm[i, j]), ha="center", va="center", color="black" if cm[i, j] < cm.max()/2 else "white", fontsize=8)
+            names = list(valid_results.keys())
+            scores = [valid_results[n][rank_key] if not np.isnan(valid_results[n][rank_key]) else 0 for n in names]
+            
+            sorted_pairs = sorted(zip(names, scores), key=lambda x: x[1], reverse=True)
+            names_sorted, scores_sorted = zip(*sorted_pairs)
+            
+            fig, ax = plt.subplots(figsize=(7, 4))
+            bars = ax.bar(names_sorted, scores_sorted, color=COLOR_ACCENT, edgecolor=COLOR_HAIRLINE)
+            ax.set_ylabel(rank_label)
+            ax.set_ylim(0, 1.05)
+            ax.set_title(f"{rank_label} Ranking", fontsize=12)
+            plt.xticks(rotation=25, ha="right", fontsize=8)
+            
+            for bar, s in zip(bars, scores_sorted):
+                ax.text(bar.get_x() + bar.get_width()/2, s + 0.02, f"{s:.2f}", ha="center", fontsize=8, color=COLOR_INK)
             
             fig, ax = _style_matplotlib_fig(fig, ax)
             st.pyplot(fig)
             plt.close(fig)
+        else:
+            st.info("Matplotlib is not available. Bar chart visualization is disabled.")
+        
+        # Confusion matrix picker
+        if MATPLOTLIB_AVAILABLE:
+            st.markdown("##### কনফিউশন ম্যাট্রিক্স · Confusion Matrix")
+            model_names = list(valid_results.keys())
+            selected_model = st.selectbox(
+                bilingual_plain("Select a model to view its confusion matrix", "কনফিউশন ম্যাট্রিক্স দেখতে একটি মডেল নির্বাচন করুন"),
+                model_names,
+                key="cm_picker"
+            )
+            
+            if selected_model in valid_results:
+                r = valid_results[selected_model]
+                cm = r["confusion_matrix"]
+                classes = r["classes"]
+                
+                fig, ax = plt.subplots(figsize=(6, 5))
+                im = ax.imshow(cm, cmap="Blues")
+                ax.set_xticks(np.arange(len(classes)))
+                ax.set_yticks(np.arange(len(classes)))
+                ax.set_xticklabels([c.replace("_", " ") for c in classes], rotation=45, ha="right", fontsize=7)
+                ax.set_yticklabels([c.replace("_", " ") for c in classes], fontsize=7)
+                ax.set_xlabel("Predicted", fontsize=9)
+                ax.set_ylabel("True", fontsize=9)
+                ax.set_title(f"{selected_model} — Confusion Matrix", fontsize=11)
+                
+                for i in range(len(classes)):
+                    for j in range(len(classes)):
+                        ax.text(j, i, str(cm[i, j]), ha="center", va="center", color="black" if cm[i, j] < cm.max()/2 else "white", fontsize=8)
+                
+                fig, ax = _style_matplotlib_fig(fig, ax)
+                st.pyplot(fig)
+                plt.close(fig)
+        else:
+            st.info("Matplotlib is not available. Confusion matrix visualization is disabled.")
         
         # Why Logistic Regression
         st.markdown("##### কেন লজিস্টিক রিগ্রেশন? · Why Logistic Regression?")
@@ -759,36 +776,39 @@ def render_model_insights_tab(df: pd.DataFrame, vectorizer_search, X_search, ban
         "আনসুপারভাইসড লার্নিং: অ্যালগরিদম নিজেই অনুরূপ টেক্সট গোষ্ঠীভুক্ত করে।"
     )
     
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4.5))
-    
-    # Plot 1: Colored by K-Means cluster
-    palette = plt.get_cmap("tab10")
-    coords = kmeans_data["coords"]
-    cluster_labels = kmeans_data["cluster_labels"]
-    unique_clusters = sorted(set(cluster_labels))
-    for i, c in enumerate(unique_clusters):
-        mask = cluster_labels == c
-        ax1.scatter(coords[mask, 0], coords[mask, 1], s=35, alpha=0.8,
-                   color=palette(i % 10), label=f"Cluster {c}", edgecolor="white", linewidth=0.3)
-    ax1.set_xlabel("PC1"); ax1.set_ylabel("PC2")
-    ax1.set_title("K-Means Clusters", fontsize=10)
-    ax1.legend(fontsize=6, loc="best")
-    
-    # Plot 2: Colored by true topic
-    topics = insights["topic"]
-    unique_topics = sorted(topics.unique())
-    for i, t in enumerate(unique_topics):
-        mask = (topics == t).to_numpy()
-        ax2.scatter(coords[mask, 0], coords[mask, 1], s=35, alpha=0.8,
-                   color=palette(i % 10), label=t.replace("_", " "), edgecolor="white", linewidth=0.3)
-    ax2.set_xlabel("PC1"); ax2.set_ylabel("PC2")
-    ax2.set_title("True Topic Labels", fontsize=10)
-    ax2.legend(fontsize=6, loc="best")
-    
-    fig, (ax1, ax2) = _style_matplotlib_fig(fig, ax1), _style_matplotlib_fig(fig, ax2)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+    if MATPLOTLIB_AVAILABLE:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4.5))
+        
+        # Plot 1: Colored by K-Means cluster
+        palette = plt.get_cmap("tab10")
+        coords = kmeans_data["coords"]
+        cluster_labels = kmeans_data["cluster_labels"]
+        unique_clusters = sorted(set(cluster_labels))
+        for i, c in enumerate(unique_clusters):
+            mask = cluster_labels == c
+            ax1.scatter(coords[mask, 0], coords[mask, 1], s=35, alpha=0.8,
+                       color=palette(i % 10), label=f"Cluster {c}", edgecolor="white", linewidth=0.3)
+        ax1.set_xlabel("PC1"); ax1.set_ylabel("PC2")
+        ax1.set_title("K-Means Clusters", fontsize=10)
+        ax1.legend(fontsize=6, loc="best")
+        
+        # Plot 2: Colored by true topic
+        topics = insights["topic"]
+        unique_topics = sorted(topics.unique())
+        for i, t in enumerate(unique_topics):
+            mask = (topics == t).to_numpy()
+            ax2.scatter(coords[mask, 0], coords[mask, 1], s=35, alpha=0.8,
+                       color=palette(i % 10), label=t.replace("_", " "), edgecolor="white", linewidth=0.3)
+        ax2.set_xlabel("PC1"); ax2.set_ylabel("PC2")
+        ax2.set_title("True Topic Labels", fontsize=10)
+        ax2.legend(fontsize=6, loc="best")
+        
+        fig, (ax1, ax2) = _style_matplotlib_fig(fig, ax1), _style_matplotlib_fig(fig, ax2)
+        fig.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+    else:
+        st.info("Matplotlib is not available. Cluster visualization is disabled.")
     
     ari = kmeans_data["ari"]
     ari_pct = max(0, (ari + 1) / 2 * 100)
@@ -812,21 +832,24 @@ def render_model_insights_tab(df: pd.DataFrame, vectorizer_search, X_search, ban
         "প্রিন্সিপাল কম্পোনেন্ট অ্যানালাইসিস: উচ্চ-মাত্রিক টেক্সট ডেটাকে ২ডিতে রূপান্তর।"
     )
     
-    fig, ax = plt.subplots(figsize=(7, 5))
-    tier1_classes = insights["tier1_class"]
-    unique_classes = sorted(tier1_classes.unique())
-    for i, c in enumerate(unique_classes):
-        mask = (tier1_classes == c).to_numpy()
-        ax.scatter(coords[mask, 0], coords[mask, 1], s=40, alpha=0.85,
-                   color=palette(i % 10), label=c.replace("_", " "), edgecolor="white", linewidth=0.4)
-    ax.set_xlabel("PC1", fontsize=10)
-    ax.set_ylabel("PC2", fontsize=10)
-    ax.set_title(f"PCA: {kmeans_data['explained']:.1f}% variance explained", fontsize=11)
-    ax.legend(fontsize=7, loc="best")
-    
-    fig, ax = _style_matplotlib_fig(fig, ax)
-    st.pyplot(fig)
-    plt.close(fig)
+    if MATPLOTLIB_AVAILABLE:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        tier1_classes = insights["tier1_class"]
+        unique_classes = sorted(tier1_classes.unique())
+        for i, c in enumerate(unique_classes):
+            mask = (tier1_classes == c).to_numpy()
+            ax.scatter(coords[mask, 0], coords[mask, 1], s=40, alpha=0.85,
+                       color=palette(i % 10), label=c.replace("_", " "), edgecolor="white", linewidth=0.4)
+        ax.set_xlabel("PC1", fontsize=10)
+        ax.set_ylabel("PC2", fontsize=10)
+        ax.set_title(f"PCA: {kmeans_data['explained']:.1f}% variance explained", fontsize=11)
+        ax.legend(fontsize=7, loc="best")
+        
+        fig, ax = _style_matplotlib_fig(fig, ax)
+        st.pyplot(fig)
+        plt.close(fig)
+    else:
+        st.info("Matplotlib is not available. PCA visualization is disabled.")
     
     st.caption(
         f"**{kmeans_data['explained']:.1f}%** of the total variance in the TF-IDF vectors is captured by "
