@@ -22,6 +22,7 @@ from __future__ import annotations
 import difflib
 import os
 import re
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -34,6 +35,7 @@ import pandas as pd
 import streamlit as st
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import (
@@ -49,6 +51,8 @@ from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
+
+warnings.filterwarnings("ignore")
 
 # --------------------------------------------------------------------------- #
 # CONSTANTS
@@ -636,7 +640,7 @@ def render_model_insights_tab(df: pd.DataFrame, vectorizer_search, X_search, ban
             )
     
     st.caption(
-        "**Retrieval** (exact → TF-IDC → fuzzy) finds the best match. **Classification** (Logistic Regression) "
+        "**Retrieval** (exact → TF-IDF → fuzzy) finds the best match. **Classification** (Logistic Regression) "
         "is a secondary confirmation signal — it never overrides the retrieved answer. "
         "**রিট্রিভাল** (সঠিক → টিএফ-আইডিএফ → অস্পষ্ট) সবচেয়ে ভালো মিল খুঁজে বের করে। **ক্লাসিফিকেশন** "
         "(লজিস্টিক রিগ্রেশন) একটি গৌণ নিশ্চিতকরণ সংকেত — এটি কখনই রিট্রিভাল করা উত্তরকে ওভাররাইড করে না।"
@@ -914,6 +918,298 @@ def render_model_insights_tab(df: pd.DataFrame, vectorizer_search, X_search, ban
 
 
 # --------------------------------------------------------------------------- #
+# UI — DESIGN TOKENS & STYLE
+# --------------------------------------------------------------------------- #
+
+def inject_css() -> None:
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+        :root {
+            --paper: #F2ECDD;
+            --card: #FBF8EF;
+            --ink: #2B2A24;
+            --ink-muted: #544F42;   /* darkened from an earlier draft: 4.0:1 on paper failed WCAG AA; this is 6.9:1+ */
+            --accent: #2F4858;
+            --accent-soft: #E4DEC9;
+            --hairline: #DDD3B8;
+            --flag-bg: #F3E6C8;
+            --flag-ink: #6B4E1F;    /* darkened for the same reason: 6.2:1 on flag-bg */
+            --font-display: 'Noto Serif Bengali', Georgia, serif;
+            --font-body: 'Noto Sans Bengali', 'Inter', sans-serif;
+            --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+            --space-1: 0.4rem;
+            --space-2: 0.8rem;
+            --space-3: 1.4rem;
+            --space-4: 2.2rem;
+            --space-5: 3.2rem;
+        }
+
+        html, body, [class*="css"] {
+            background-color: var(--paper) !important;
+            color: var(--ink);
+            font-family: var(--font-body);
+        }
+        .block-container { max-width: 700px; padding-top: var(--space-4); padding-bottom: var(--space-5); }
+        #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; }
+
+        /* Accessible focus states — never remove outline without replacing it */
+        a:focus-visible, button:focus-visible, input:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { animation: none !important; transition: none !important; }
+        }
+
+        /* ---------- Header ---------- */
+        .app-eyebrow {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+            margin-bottom: var(--space-1);
+        }
+        .app-title {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 2.1rem;
+            color: var(--ink);
+            margin-bottom: var(--space-1);
+            line-height: 1.15;
+        }
+        .app-subtitle {
+            font-family: var(--font-body);
+            color: var(--ink-muted);
+            font-size: 0.95rem;
+        }
+        .app-rule {
+            border: none;
+            border-top: 1px solid var(--hairline);
+            margin: var(--space-3) 0 var(--space-4) 0;
+        }
+
+        /* ---------- Bilingual text pattern ---------- */
+        /* Short labels: English + Bangla on one line, Bangla slightly muted
+           so the eye isn't asked to parse two full-weight scripts at once. */
+        .bn-inline {
+            font-family: var(--font-body);
+            color: var(--ink-muted);
+        }
+        /* Full sentences: English then Bangla stacked, both full-strength,
+           since a Bangla-first reader needs the second line to stand fully
+           on its own, not read as a dim footnote. */
+        .en-line { display: block; color: var(--ink); }
+        .bn-line {
+            display: block;
+            color: var(--ink);
+            margin-top: 0.2rem;
+            font-size: 0.97em;
+        }
+
+        /* ---------- Search ---------- */
+        .field-label {
+            font-family: var(--font-body);
+            font-size: 0.85rem;
+            color: var(--ink-muted);
+            margin-bottom: 0.35rem;
+        }
+        div[data-testid="stTextInput"] input {
+            background-color: var(--card);
+            border: 1px solid var(--hairline);
+            border-radius: 3px;
+            color: var(--ink);
+            font-size: 1.08rem;
+            padding: 0.85rem 1rem;
+        }
+        div[data-testid="stTextInput"] input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent);
+        }
+        div[data-testid="stTextInput"] input::placeholder { color: var(--ink-muted); opacity: 0.8; }
+
+        .stButton > button {
+            background-color: var(--accent);
+            color: var(--card);
+            border: none;
+            border-radius: 3px;
+            padding: 0.5rem 1.2rem;
+            font-family: var(--font-body);
+            font-weight: 500;
+            font-size: 0.88rem;
+            letter-spacing: 0.02em;
+            transition: background-color 120ms ease;
+        }
+        .stButton > button:hover { background-color: #24394A; color: var(--card); }
+
+        /* Mode toggle reads like a catalog tab, not a pill switch */
+        div[role="radiogroup"] { gap: var(--space-3); }
+        div[role="radiogroup"] label {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+        }
+
+        /* ---------- Result entry ---------- */
+        @keyframes entryFadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .entry {
+            background-color: var(--card);
+            border: 1px solid var(--hairline);
+            border-radius: 3px;
+            padding: var(--space-3) var(--space-3) var(--space-2) var(--space-3);
+            margin-top: var(--space-3);
+            animation: entryFadeIn 220ms ease-out;
+        }
+        .entry-refno {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--ink-muted);
+            letter-spacing: 0.05em;
+            margin-bottom: var(--space-2);
+        }
+        .entry-question {
+            font-family: var(--font-display);
+            font-size: 1.2rem;
+            font-weight: 600;
+            line-height: 1.4;
+            margin-bottom: 0.3rem;
+        }
+        .entry-question-en {
+            font-family: var(--font-body);
+            font-size: 0.92rem;
+            color: var(--ink-muted);
+            margin-bottom: var(--space-2);
+        }
+        .category-label {
+            font-family: var(--font-body);
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--ink);
+            border-left: 3px solid var(--accent);
+            padding: 0.2rem 0 0.2rem 0.65rem;
+            margin: var(--space-2) 0 var(--space-3) 0;
+        }
+        .category-mark { color: var(--accent); margin-right: 0.4rem; font-weight: 400; }
+
+        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: var(--space-2); }
+
+        .citation-block {
+            border-left: 2px solid var(--hairline);
+            padding: 0.45rem 0 0.45rem 0.85rem;
+            color: var(--ink-muted);
+            font-size: 0.88rem;
+            font-style: italic;
+            margin-bottom: var(--space-2);
+        }
+        .citation-source {
+            display: block;
+            font-family: var(--font-mono);
+            font-style: normal;
+            font-size: 0.76rem;
+            color: var(--ink-muted);
+            margin-top: 0.25rem;
+            letter-spacing: 0.02em;
+        }
+
+        .verification-flag {
+            display: inline-block;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--flag-ink);
+            background-color: var(--flag-bg);
+            border: 1px solid #E0CD9C;
+            border-radius: 2px;
+            padding: 0.15rem 0.5rem;
+            margin-bottom: var(--space-2);
+            letter-spacing: 0.02em;
+        }
+
+        .related-heading {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--ink-muted);
+            margin: var(--space-2) 0 0.35rem 0;
+            border-top: 1px solid var(--hairline);
+            padding-top: var(--space-2);
+        }
+
+        /* ---------- No-match state ---------- */
+        .no-match-box {
+            background-color: var(--card);
+            border: 1px dashed var(--hairline);
+            border-radius: 3px;
+            padding: var(--space-3);
+            margin-top: var(--space-3);
+        }
+        .no-match-heading {
+            font-family: var(--font-display);
+            font-size: 1.05rem;
+            margin-bottom: 0.3rem;
+        }
+        .no-match-body { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
+
+        /* ---------- Clickable list rows (related rulings / suggestions) ---------- */
+        div[data-testid="stButton"] button[kind="secondary"] {
+            background-color: transparent;
+            color: var(--ink);
+            border: none;
+            border-bottom: 1px solid var(--hairline);
+            border-radius: 0;
+            text-align: left;
+            width: 100%;
+            padding: 0.55rem 0.1rem;
+            font-family: var(--font-body);
+            font-weight: 400;
+            font-size: 0.92rem;
+        }
+        div[data-testid="stButton"] button[kind="secondary"]:hover {
+            background-color: var(--accent-soft);
+            color: var(--ink);
+        }
+
+        /* ---------- Browse mode ---------- */
+        .browse-count {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--ink-muted);
+            letter-spacing: 0.05em;
+            margin: var(--space-2) 0 var(--space-1) 0;
+        }
+
+        /* ---------- Footer ---------- */
+        .app-footer {
+            margin-top: var(--space-5);
+            padding-top: var(--space-2);
+            border-top: 1px solid var(--hairline);
+            color: var(--ink-muted);
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 480px) {
+            .block-container { padding-left: 1.1rem; padding-right: 1.1rem; }
+            .app-title { font-size: 1.6rem; }
+            .entry { padding: var(--space-2); }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # UI — RENDERING
 # --------------------------------------------------------------------------- #
 
@@ -1141,8 +1437,7 @@ def _image_to_base64(path: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# MAIN
-# --------------------------------------------------------------------------- #
+# MAIN# --------------------------------------------------------------------------- #
 
 def main() -> None:
     st.set_page_config(page_title="Ruling Reference", layout="centered")
