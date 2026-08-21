@@ -26,9 +26,10 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
+# IMPORTANT: Set matplotlib backend BEFORE importing pyplot
 import matplotlib
-
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -931,12 +932,12 @@ def inject_css() -> None:
             --paper: #F2ECDD;
             --card: #FBF8EF;
             --ink: #2B2A24;
-            --ink-muted: #544F42;   /* darkened from an earlier draft: 4.0:1 on paper failed WCAG AA; this is 6.9:1+ */
+            --ink-muted: #544F42;
             --accent: #2F4858;
             --accent-soft: #E4DEC9;
             --hairline: #DDD3B8;
             --flag-bg: #F3E6C8;
-            --flag-ink: #6B4E1F;    /* darkened for the same reason: 6.2:1 on flag-bg */
+            --flag-ink: #6B4E1F;
             --font-display: 'Noto Serif Bengali', Georgia, serif;
             --font-body: 'Noto Sans Bengali', 'Inter', sans-serif;
             --font-mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -955,7 +956,6 @@ def inject_css() -> None:
         .block-container { max-width: 700px; padding-top: var(--space-4); padding-bottom: var(--space-5); }
         #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; }
 
-        /* Accessible focus states — never remove outline without replacing it */
         a:focus-visible, button:focus-visible, input:focus-visible {
             outline: 2px solid var(--accent);
             outline-offset: 2px;
@@ -964,7 +964,6 @@ def inject_css() -> None:
             * { animation: none !important; transition: none !important; }
         }
 
-        /* ---------- Header ---------- */
         .app-eyebrow {
             font-family: var(--font-mono);
             font-size: 0.72rem;
@@ -992,16 +991,10 @@ def inject_css() -> None:
             margin: var(--space-3) 0 var(--space-4) 0;
         }
 
-        /* ---------- Bilingual text pattern ---------- */
-        /* Short labels: English + Bangla on one line, Bangla slightly muted
-           so the eye isn't asked to parse two full-weight scripts at once. */
         .bn-inline {
             font-family: var(--font-body);
             color: var(--ink-muted);
         }
-        /* Full sentences: English then Bangla stacked, both full-strength,
-           since a Bangla-first reader needs the second line to stand fully
-           on its own, not read as a dim footnote. */
         .en-line { display: block; color: var(--ink); }
         .bn-line {
             display: block;
@@ -1010,7 +1003,6 @@ def inject_css() -> None:
             font-size: 0.97em;
         }
 
-        /* ---------- Search ---------- */
         .field-label {
             font-family: var(--font-body);
             font-size: 0.85rem;
@@ -1045,7 +1037,6 @@ def inject_css() -> None:
         }
         .stButton > button:hover { background-color: #24394A; color: var(--card); }
 
-        /* Mode toggle reads like a catalog tab, not a pill switch */
         div[role="radiogroup"] { gap: var(--space-3); }
         div[role="radiogroup"] label {
             font-family: var(--font-mono);
@@ -1055,7 +1046,6 @@ def inject_css() -> None:
             color: var(--ink-muted);
         }
 
-        /* ---------- Result entry ---------- */
         @keyframes entryFadeIn {
             from { opacity: 0; transform: translateY(4px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1145,7 +1135,6 @@ def inject_css() -> None:
             padding-top: var(--space-2);
         }
 
-        /* ---------- No-match state ---------- */
         .no-match-box {
             background-color: var(--card);
             border: 1px dashed var(--hairline);
@@ -1160,7 +1149,6 @@ def inject_css() -> None:
         }
         .no-match-body { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
 
-        /* ---------- Clickable list rows (related rulings / suggestions) ---------- */
         div[data-testid="stButton"] button[kind="secondary"] {
             background-color: transparent;
             color: var(--ink);
@@ -1179,7 +1167,6 @@ def inject_css() -> None:
             color: var(--ink);
         }
 
-        /* ---------- Browse mode ---------- */
         .browse-count {
             font-family: var(--font-mono);
             font-size: 0.78rem;
@@ -1188,7 +1175,6 @@ def inject_css() -> None:
             margin: var(--space-2) 0 var(--space-1) 0;
         }
 
-        /* ---------- Footer ---------- */
         .app-footer {
             margin-top: var(--space-5);
             padding-top: var(--space-2);
@@ -1268,7 +1254,7 @@ def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classif
     else:
         st.markdown(f'<div class="citation-block"><span class="citation-source">{ref_source}</span></div>', unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)  # close .entry (buttons below can't live inside raw HTML)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
     if not related.empty:
@@ -1437,7 +1423,8 @@ def _image_to_base64(path: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# MAIN# --------------------------------------------------------------------------- #
+# MAIN
+# --------------------------------------------------------------------------- #
 
 def main() -> None:
     st.set_page_config(page_title="Ruling Reference", layout="centered")
