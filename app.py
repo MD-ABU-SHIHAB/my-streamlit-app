@@ -4,7 +4,11 @@ app.py — Islamic ruling reference search (CSE 469 capstone)
 Retrieval-first search over dataset.csv (exact match -> TF-IDF cosine
 similarity -> fuzzy match -> honest no-match state), with a Logistic
 Regression classifier used only as a secondary confirmation signal, never
-as the primary displayed answer. Includes a browse/filter mode.
+as the primary displayed answer. Includes a browse/filter mode and a live
+ML & Pattern Recognition Lab.
+
+Trilingual UI (English / Bangla / Arabic). Optional Arabic reference columns
+are supported additively and degrade gracefully when absent.
 
 Run:
     streamlit run app.py
@@ -15,6 +19,7 @@ Required packages (pip):
     numpy
     scikit-learn
     matplotlib
+    plotly
 """
 
 from __future__ import annotations
@@ -26,28 +31,16 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
-# Try to import matplotlib with Agg backend
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
-    # Create dummy placeholder so code doesn't break
-    class DummyPlot:
-        def __init__(self, *args, **kwargs):
-            pass
-    plt = DummyPlot()
-
 import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     adjusted_rand_score,
@@ -62,23 +55,20 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
 
-warnings.filterwarnings("ignore")
-
 # --------------------------------------------------------------------------- #
 # CONSTANTS
 # --------------------------------------------------------------------------- #
 
 DATA_PATH: str = "dataset.csv"
-RANDOM_STATE: int = 42  # matches main.py, for consistent classifier behavior
+RANDOM_STATE: int = 42
 
-# Retrieval pipeline thresholds. Named and commented so they're easy to tune
-# from one place as the dataset grows.
-TFIDF_SIMILARITY_THRESHOLD: float = 0.30   # min cosine similarity to accept a TF-IDF match
-FUZZY_MATCH_THRESHOLD: float = 0.55        # min difflib ratio to accept a fuzzy match
-TOP_K_SUGGESTIONS: int = 5                 # suggestions shown in the no-match state
-TOP_K_RELATED: int = 4                     # related rulings shown under a confident match
-MIN_QUERY_LEN_FOR_EXACT: int = 2           # ignore exact-match stage for near-empty queries
-MEANINGFUL_TOKEN_MIN_LEN: int = 3          # ignore short/particle-like tokens ("is", "কি") for exact matching
+TFIDF_SIMILARITY_THRESHOLD: float = 0.30
+FUZZY_MATCH_THRESHOLD: float = 0.55
+TOP_K_SUGGESTIONS: int = 5
+TOP_K_RELATED: int = 4
+MIN_QUERY_LEN_FOR_EXACT: int = 2
+MEANINGFUL_TOKEN_MIN_LEN: int = 3
+MAX_HISTORY: int = 5
 
 REQUIRED_COLUMNS = [
     "id", "question_bn", "question_en", "question_banglish", "tier1_class",
@@ -98,8 +88,6 @@ TOPICS = [
     "Funeral_and_Mourning", "Oaths_and_Vows",
 ]
 
-# Same explicit Bangla stopword list as main.py, kept identical on purpose so
-# app.py's live preprocessing matches the offline report's preprocessing exactly.
 BANGLA_STOPWORDS = {
     "কি", "কী", "না", "নাই", "কি না", "এবং", "ও", "তে", "এর", "এই",
     "সেই", "একটি", "একটা", "কে", "কাকে", "কোন", "কোনো", "যে", "যেটা",
@@ -119,23 +107,14 @@ ENGLISH_STOPWORDS = {
 
 NEEDS_VERIFICATION_LABEL = "NEEDS_VERIFICATION"
 PLACEHOLDER_REFERENCE_TEXT = "SEE_REFERENCE_SOURCE"
-
-# Real Qur'anic section-divider glyph (rub' el hizb), used as the result
-# marker. Not a decorative emoji — it is the actual mark used in printed
-# Mus'haf pages to divide sections, which is why it belongs here.
 SECTION_MARK = "\u06de"  # ۞
 
 STAGE_LABELS = {
-    "exact_match": ("Exact match", "সরাসরি মিল"),
-    "tfidf_cosine": ("TF-IDF · cosine similarity", "শব্দ-সাদৃশ্য বিশ্লেষণ"),
-    "fuzzy_match": ("Approximate match", "আনুমানিক মিল"),
+    "exact_match": ("Exact match", "সরাসরি মিল", "تطابق مباشر"),
+    "tfidf_cosine": ("TF-IDF · cosine similarity", "শব্দ-সাদৃশ্য বিশ্লেষণ", "تشابه TF-IDF"),
+    "fuzzy_match": ("Approximate match", "আনুমানিক মিল", "تطابق تقريبي"),
 }
 
-# Most users of this app read Bangla first — every English UI string ships
-# with a Bangla counterpart. These two maps translate the fixed category
-# vocabulary (which the dataset stores in English, since it's the ML
-# classification target) for display only; they never touch the underlying
-# tier1_class/topic values used for matching or classification.
 TIER1_CLASS_BN = {
     "Obligatory": "আবশ্যক",
     "Recommended": "সুপারিশকৃত",
@@ -144,6 +123,16 @@ TIER1_CLASS_BN = {
     "Forbidden": "নিষিদ্ধ",
     "Religious_Innovation": "বিদআত",
     "Faith_Violation": "ঈমান পরিপন্থী",
+}
+
+TIER1_CLASS_AR = {
+    "Obligatory": "واجب",
+    "Recommended": "مستحب",
+    "Permissible": "جائز",
+    "Disliked": "مكروه",
+    "Forbidden": "محرم",
+    "Religious_Innovation": "بدعة",
+    "Faith_Violation": "مخالفة للإيمان",
 }
 
 TOPIC_BN = {
@@ -159,7 +148,20 @@ TOPIC_BN = {
     "Oaths_and_Vows": "শপথ ও মানত",
 }
 
-# Theme colors for matplotlib (matches CSS palette)
+TOPIC_AR = {
+    "Worship": "العبادة",
+    "Food_and_Drink": "الطعام والشراب",
+    "Family_and_Marriage": "الأسرة والزواج",
+    "Business_and_Finance": "التجارة والمالية",
+    "Purity": "الطهارة",
+    "Social_Conduct": "السلوك الاجتماعي",
+    "Clothing_and_Adornment": "اللباس والزينة",
+    "Faith_and_Aqidah": "الإيمان والعقيدة",
+    "Funeral_and_Mourning": "الجنازة والعزاء",
+    "Oaths_and_Vows": "الأيمان والنذور",
+}
+
+# Colour palette (existing — no new accents)
 COLOR_PAPER = "#F2ECDD"
 COLOR_CARD = "#FBF8EF"
 COLOR_INK = "#2B2A24"
@@ -170,21 +172,111 @@ COLOR_HAIRLINE = "#DDD3B8"
 COLOR_FLAG_BG = "#F3E6C8"
 COLOR_FLAG_INK = "#6B4E1F"
 
+# Plotly colourblind-safe qualitative palette
+PLOTLY_SAFE = px.colors.qualitative.Safe
 
-def bilingual(en: str, bn: str) -> str:
-    """Compact inline pairing for short labels: 'English · বাংলা'."""
-    return f"{en} <span class='bn-inline'>· {bn}</span>"
+# --------------------------------------------------------------------------- #
+# UI STRINGS (trilingual)
+# --------------------------------------------------------------------------- #
+
+UI_STRINGS: dict[str, dict[str, str]] = {
+    "app_title": {
+        "en": "Ruling Reference",
+        "bn": "মাসআলা অনুসন্ধান",
+        "ar": "مرجع الأحكام الشرعية",
+    },
+    "app_eyebrow": {
+        "en": "A reference collection of verified rulings",
+        "bn": "যাচাইকৃত মাসআলার একটি সংকলন",
+        "ar": "مجموعة مرجعية من الأحكام الموثقة",
+    },
+    "app_subtitle": {
+        "en": "Search in Bangla, English, or Banglish — every entry traces to a cited source.",
+        "bn": "বাংলা, ইংরেজি অথবা বাংলিশে খুঁজুন — প্রতিটি ফলাফলের সাথে যাচাইযোগ্য তথ্যসূত্র দেওয়া আছে।",
+        "ar": "ابحث بالعربية أو الإنجليزية أو البنغالية — كل إدخال مرتبط بمصدر موثق.",
+    },
+    "search_placeholder": {
+        "en": "namaj pora ki · is riba haram · বিয়ে করা কি সুন্নত…",
+        "bn": "নামাজ পড়া কি · সুদ কি হারাম · বিয়ে করা কি সুন্নত…",
+        "ar": "هل الصلاة واجبة · هل الربا محرم…",
+    },
+    "mode_search": {"en": "Search", "bn": "খুঁজুন", "ar": "بحث"},
+    "mode_browse": {"en": "Browse", "bn": "সবগুলো দেখুন", "ar": "تصفح"},
+    "mode_lab": {"en": "Model Insights", "bn": "মডেল বিশ্লেষণ", "ar": "تحليل النماذج"},
+    "type_question": {"en": "Type your question", "bn": "আপনার প্রশ্ন লিখুন", "ar": "اكتب سؤالك"},
+    "copy_citation": {"en": "Copy citation", "bn": "উদ্ধৃতি কপি", "ar": "نسخ الاقتباس"},
+    "save_session": {"en": "Save this session", "bn": "এই সেশনে সংরক্ষণ", "ar": "حفظ لهذه الجلسة"},
+    "unsave_session": {"en": "Remove from saved", "bn": "সংরক্ষণ থেকে সরান", "ar": "إزالة من المحفوظ"},
+    "saved_panel": {
+        "en": "Saved this session (cleared on refresh)",
+        "bn": "এই সেশনে সংরক্ষিত (রিফ্রেশে মুছে যাবে)",
+        "ar": "محفوظ لهذه الجلسة (يُمسح عند التحديث)",
+    },
+    "history_heading": {"en": "Recent searches", "bn": "সাম্প্রতিক অনুসন্ধান", "ar": "عمليات البحث الأخيرة"},
+    "has_arabic_filter": {"en": "Has Arabic reference", "bn": "আরবি রেফারেন্স আছে", "ar": "يحتوي على مرجع عربي"},
+    "font_size": {"en": "Text size", "bn": "অক্ষরের আকার", "ar": "حجم النص"},
+    "font_small": {"en": "S", "bn": "ছ", "ar": "ص"},
+    "font_normal": {"en": "M", "bn": "ম", "ar": "و"},
+    "font_large": {"en": "L", "bn": "ব", "ar": "ك"},
+    "related_heading": {"en": "Related entries", "bn": "সম্পর্কিত মাসআলা", "ar": "إدخالات ذات صلة"},
+    "closest_heading": {"en": "Closest entries", "bn": "কাছাকাছি এন্ট্রি", "ar": "أقرب الإدخالات"},
+    "apparatus": {"en": "Apparatus — how this was matched", "bn": "মিলের বিবরণ", "ar": "تفاصيل المطابقة"},
+    "no_match_heading": {
+        "en": "No confident match in the reference set.",
+        "bn": "নির্ভরযোগ্য কোনো মিল পাওয়া যায়নি।",
+        "ar": "لم يتم العثور على تطابق موثوق في المجموعة المرجعية.",
+    },
+    "no_match_body": {
+        "en": "Try different wording, or open one of the closest entries below.",
+        "bn": "অন্যভাবে লিখে চেষ্টা করুন, অথবা নিচের কাছাকাছি এন্ট্রিগুলো দেখুন।",
+        "ar": "جرب صياغة مختلفة، أو افتح أحد أقرب الإدخالات أدناه.",
+    },
+    "footer": {
+        "en": "Entries here are for educational reference only. For personal or complex matters, consult a qualified scholar.",
+        "bn": "এখানে দেওয়া তথ্য শুধুমাত্র শিক্ষামূলক রেফারেন্সের জন্য। ব্যক্তিগত বা জটিল বিষয়ে অবশ্যই একজন যোগ্য আলেমের পরামর্শ নিন।",
+        "ar": "هذه الإدخالات للمرجعية التعليمية فقط. للأمور الشخصية أو المعقدة، استشر عالماً مؤهلاً.",
+    },
+    "topic_label": {"en": "Topic", "bn": "বিষয়", "ar": "الموضوع"},
+    "category_label": {"en": "Category", "bn": "শ্রেণি", "ar": "الفئة"},
+    "all_option": {"en": "All", "bn": "সব", "ar": "الكل"},
+    "browse_count": {"en": "entries", "bn": "টি এন্ট্রি", "ar": "إدخال"},
+    "unverified": {
+        "en": "Unverified reference — pending scholarly check",
+        "bn": "যাচাই বাকি — বিশেষজ্ঞ পর্যালোচনার অপেক্ষায়",
+        "ar": "مرجع غير موثق — بانتظار المراجعة العلمية",
+    },
+    "lab_intro": {
+        "en": "This tab demonstrates every ML/PR syllabus concept hands-on, with real numbers computed from the real dataset — not static screenshots.",
+        "bn": "এটি সরাসরি ডেটাসেট থেকে গণনা করা বাস্তব সংখ্যা সহ হ্যান্ডস-অন প্রদর্শনের জন্য তৈরি।",
+        "ar": "تعرض هذه التبويبة كل مفهوم من مقرر التعلم الآلي والتعرف على الأنماط بأرقام حقيقية محسوبة من مجموعة البيانات.",
+    },
+    "why_logreg": {
+        "en": "Logistic Regression runs the live Search tab. It is chosen for cross-validation stability (low variance), not the single highest raw score on one split.",
+        "bn": "লজিস্টিক রিগ্রেশন লাইভ সার্চ ট্যাব চালায়। এটি ক্রস-ভ্যালিডেশন স্থিতিশীলতার জন্য নির্বাচিত।",
+        "ar": "الانحدار اللوجستي يشغّل تبويب البحث المباشر. اختير لاستقرار التحقق المتقاطع (انخفاض التباين).",
+    },
+}
 
 
-def bilingual_plain(en: str, bn: str) -> str:
-    """Plain-text pairing for widget labels that don't render HTML (e.g. st.expander)."""
-    return f"{en} · {bn}"
+def t(key: str, lang: str) -> str:
+    """Return the UI string for the given key and language; fall back to English."""
+    return UI_STRINGS.get(key, {}).get(lang) or UI_STRINGS.get(key, {}).get("en", key)
 
 
-def bilingual_block(en: str, bn: str) -> str:
-    """Stacked pairing for full sentences — English line, Bangla line below,
-    each fully legible on its own rather than interleaved mid-sentence."""
-    return f'<span class="en-line">{en}</span><span class="bn-line">{bn}</span>'
+def tier1_display(tier1: str, lang: str) -> str:
+    if lang == "bn":
+        return TIER1_CLASS_BN.get(tier1, tier1.replace("_", " "))
+    if lang == "ar":
+        return TIER1_CLASS_AR.get(tier1, tier1.replace("_", " "))
+    return tier1.replace("_", " ")
+
+
+def topic_display(topic: str, lang: str) -> str:
+    if lang == "bn":
+        return TOPIC_BN.get(topic, topic.replace("_", " "))
+    if lang == "ar":
+        return TOPIC_AR.get(topic, topic.replace("_", " "))
+    return topic.replace("_", " ")
 
 
 # --------------------------------------------------------------------------- #
@@ -194,29 +286,28 @@ def bilingual_block(en: str, bn: str) -> str:
 @dataclass
 class RetrievalResult:
     row: Optional[pd.Series]
-    stage: str                    # "exact_match" | "tfidf_cosine" | "fuzzy_match" | "no_match"
-    similarity: float              # 0..1, meaning depends on stage
-    suggestions: list = field(default_factory=list)  # list of pd.Series, used when stage == "no_match"
+    stage: str
+    similarity: float
+    suggestions: list = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
-# LOADING & PREPROCESSING (kept identical in approach to main.py)
+# LOADING & PREPROCESSING
 # --------------------------------------------------------------------------- #
 
 class DatasetError(Exception):
-    """Raised for any dataset load/shape problem, so main() can show a clean message."""
+    """Raised for any dataset load/shape problem."""
 
 
 @st.cache_data(show_spinner=False)
 def load_dataset(path: str) -> pd.DataFrame:
-    """Load dataset.csv and validate it has the columns this app needs."""
     try:
         df = pd.read_csv(path)
     except FileNotFoundError:
         raise DatasetError(
             f"Couldn't find '{path}'. Place dataset.csv in the same folder as app.py."
         )
-    except Exception as exc:  # malformed CSV, encoding issues, etc.
+    except Exception as exc:
         raise DatasetError(f"Couldn't read '{path}': {exc}")
 
     if df.empty:
@@ -234,11 +325,14 @@ def load_dataset(path: str) -> pd.DataFrame:
         raise DatasetError(
             "Every row is missing question_bn and/or tier1_class — nothing to search."
         )
+    # Optional Arabic columns — never required
+    for col in ("reference_text_ar", "question_ar"):
+        if col not in df.columns:
+            df[col] = ""
     return df
 
 
 def clean_text(text: str) -> str:
-    """Lowercase, strip punctuation, remove Bangla+English stopwords. Matches main.py."""
     if not isinstance(text, str):
         return ""
     text = text.lower()
@@ -250,7 +344,6 @@ def clean_text(text: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def build_combined_text(df: pd.DataFrame) -> pd.DataFrame:
-    """Combine question_bn + question_en + search_keywords, same field construction as main.py."""
     df = df.copy()
     for col in ("question_bn", "question_en", "question_banglish", "search_keywords"):
         df[col] = df[col].fillna("")
@@ -263,22 +356,6 @@ def build_combined_text(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def build_banglish_map(df: pd.DataFrame) -> dict[str, set[str]]:
-    """Build an extendable synonym map from the dataset's own search_keywords.
-
-    For every row, its search_keywords terms are treated as one synonym
-    group — any term in the group maps to every other term in that group.
-    This lets a user's query in one spelling ("namaz") pull in the dataset's
-    other spellings of the same concept ("namaj", "salah", ...) at query
-    time, without hardcoding any per-question logic: new rows automatically
-    extend the map.
-
-    Only search_keywords is used (not question_banglish) deliberately:
-    search_keywords is a deliberately curated synonym list, whereas
-    question_banglish is a full sentence containing generic connector words
-    ("ki", "kora", "deya"...) that recur across almost every row. Grouping
-    on those connector words would transitively merge unrelated rows'
-    synonym groups into one another.
-    """
     banglish_map: dict[str, set[str]] = {}
     for _, row in df.iterrows():
         group_terms = set()
@@ -292,7 +369,6 @@ def build_banglish_map(df: pd.DataFrame) -> dict[str, set[str]]:
 
 
 def normalize_query(query: str, banglish_map: dict[str, set[str]]) -> str:
-    """Expand a raw query with known synonym terms, for use only inside retrieval (never shown to the user)."""
     query_lower = query.lower().strip()
     tokens = re.findall(r"[\w\u0980-\u09FF]+", query_lower)
     expanded = set(tokens)
@@ -303,25 +379,20 @@ def normalize_query(query: str, banglish_map: dict[str, set[str]]) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# CLASSIFIER (secondary confirmation signal only — never the primary answer)
+# CLASSIFIER
 # --------------------------------------------------------------------------- #
 
 @st.cache_resource(show_spinner="Indexing the reference set…")
 def train_classifier(df: pd.DataFrame):
-    """Fit the TF-IDF vectorizer + Logistic Regression once at startup.
+    """Fit TF-IDF + Logistic Regression once at startup.
 
-    Character n-grams (matching main.py's choice) handle Bangla's suffix-heavy
-    morphology and Bangla/Banglish spelling variation better than word-level
-    tokens on this dataset. Logistic Regression is used at runtime (rather
-    than the other 4 models compared in main.py) because main.py's
-    bias-variance analysis identified it as the most stable generalizer
-    across cross-validation folds — not necessarily the single highest
-    accuracy on one split, but the most reliable choice for a live app.
+    Character n-grams handle Bangla morphology and spelling variation.
+    Logistic Regression is chosen for cross-validation stability (see main.py
+    bias-variance section), not the single highest raw accuracy on one split.
     """
     df = build_combined_text(df)
     vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=1, max_features=20000)
     X = vectorizer.fit_transform(df["combined_text_clean"])
-
     y = df["tier1_class"]
     classifier: Optional[LogisticRegression] = None
     if y.nunique() >= 2 and y.value_counts().min() >= 1:
@@ -331,24 +402,14 @@ def train_classifier(df: pd.DataFrame):
 
 
 # --------------------------------------------------------------------------- #
-# RETRIEVAL PIPELINE
+# RETRIEVAL PIPELINE (unchanged order)
 # --------------------------------------------------------------------------- #
 
 def _tokenize(text: str) -> set[str]:
-    """Word-level tokens (Bangla + Latin), not substrings — avoids "is" matching inside "wearing"."""
     return set(re.findall(r"[\w\u0980-\u09FF]+", text.lower()))
 
 
 def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame) -> Optional[pd.Series]:
-    """Stage a: exact/substring match against the question & keyword fields.
-
-    Two sub-checks, both intentionally strict to avoid false positives from
-    short common words:
-      1. The full raw query appears verbatim as a substring somewhere.
-      2. Every "meaningful" query token (length >= MEANINGFUL_TOKEN_MIN_LEN,
-         after expanding through the synonym map) is found as a whole word
-         in the same row — not just any single generic word in common.
-    """
     query_norm = query.lower().strip()
     search_cols = ["question_bn", "question_en", "question_banglish", "search_keywords"]
     lowered = {c: df[c].fillna("").str.lower() for c in search_cols}
@@ -365,7 +426,6 @@ def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame
         return None
     expanded_str = normalize_query(query, banglish_map)
     expanded = {t for t in _tokenize(expanded_str) if len(t) >= MEANINGFUL_TOKEN_MIN_LEN}
-
     required_hits = len(meaningful) if len(meaningful) <= 2 else max(2, -(-len(meaningful) * 6 // 10))
 
     field_tokens = df[search_cols].fillna("").agg(" ".join, axis=1).apply(_tokenize)
@@ -376,7 +436,6 @@ def _exact_match(query: str, banglish_map: dict[str, set[str]], df: pd.DataFrame
 
 
 def _tfidf_match(query_clean: str, df: pd.DataFrame, vectorizer, X) -> tuple[Optional[pd.Series], float]:
-    """Stage b: TF-IDF + cosine similarity."""
     if not query_clean.strip():
         return None, 0.0
     q_vec = vectorizer.transform([query_clean])
@@ -389,7 +448,6 @@ def _tfidf_match(query_clean: str, df: pd.DataFrame, vectorizer, X) -> tuple[Opt
 
 
 def _fuzzy_match(query_clean: str, df: pd.DataFrame) -> tuple[Optional[pd.Series], float]:
-    """Stage c: difflib fuzzy match, as a last resort before giving up."""
     if not query_clean.strip():
         return None, 0.0
     texts = df["combined_text_clean"].tolist()
@@ -406,7 +464,6 @@ def _fuzzy_match(query_clean: str, df: pd.DataFrame) -> tuple[Optional[pd.Series
 def retrieve_candidates(
     query: str, df: pd.DataFrame, vectorizer, X, banglish_map: dict[str, set[str]]
 ) -> RetrievalResult:
-    """Run the full retrieval pipeline, stopping at the first confident stage."""
     query_clean = clean_text(query)
 
     row = _exact_match(query, banglish_map, df)
@@ -431,7 +488,6 @@ def retrieve_candidates(
 
 
 def classify_query(query: str, vectorizer, classifier) -> Optional[str]:
-    """Secondary confirmation signal only — the predicted class, never shown as the primary answer."""
     if classifier is None:
         return None
     q_clean = clean_text(query)
@@ -442,38 +498,14 @@ def classify_query(query: str, vectorizer, classifier) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------- #
-# ML INSIGHTS — functions for the Model Insights tab
-# These are deliberately "dashboard-like" and more information-dense than the
-# Search tab — this is a teaching/transparency tab, not a minimalist reference
-# interface. The distinction is intentional, not a contradiction.
+# ML INSIGHTS (Plotly)
 # --------------------------------------------------------------------------- #
 
 def _cv_k(y: pd.Series, target: int = 5) -> int:
     return min(target, int(y.value_counts().min()))
 
 
-def _style_matplotlib_fig(fig, ax):
-    """Apply the app's color palette to a matplotlib figure."""
-    if not MATPLOTLIB_AVAILABLE:
-        return fig, ax
-    fig.patch.set_facecolor(COLOR_PAPER)
-    ax.set_facecolor(COLOR_PAPER)
-    for spine in ax.spines.values():
-        spine.set_color(COLOR_HAIRLINE)
-    ax.tick_params(colors=COLOR_INK)
-    ax.xaxis.label.set_color(COLOR_INK)
-    ax.yaxis.label.set_color(COLOR_INK)
-    ax.title.set_color(COLOR_INK)
-    if ax.legend_ is not None:
-        for text in ax.legend_.get_texts():
-            text.set_color(COLOR_INK)
-        ax.legend_.get_frame().set_facecolor(COLOR_PAPER)
-        ax.legend_.get_frame().set_edgecolor(COLOR_HAIRLINE)
-    return fig, ax
-
-
 def _evaluate_classifier(model, X, y: pd.Series, cv_target: int = 5) -> dict:
-    """Fit on full data + stratified CV where the smallest class allows it."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         model.fit(X, y)
@@ -502,7 +534,6 @@ def _evaluate_classifier(model, X, y: pd.Series, cv_target: int = 5) -> dict:
                 cv_possible = False
 
     cm = confusion_matrix(y, y_pred, labels=model.classes_)
-
     return {
         "model": model,
         "classes": model.classes_,
@@ -521,7 +552,6 @@ def _evaluate_classifier(model, X, y: pd.Series, cv_target: int = 5) -> dict:
 
 
 def _get_five_classifiers(knn_k: int):
-    """Returns the 5 core classifiers used in Model Insights tab."""
     return {
         "Logistic Regression": LogisticRegression(max_iter=2000, random_state=RANDOM_STATE),
         "Naive Bayes": MultinomialNB(),
@@ -533,14 +563,12 @@ def _get_five_classifiers(knn_k: int):
 
 @st.cache_resource(show_spinner="Loading model insights...")
 def _get_insights_data(df: pd.DataFrame):
-    """Cache all Model Insights computations."""
     df = build_combined_text(df)
     vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=1, max_features=20000)
     X = vectorizer.fit_transform(df["combined_text_clean"])
     y = df["tier1_class"]
     knn_k = max(1, min(5, len(y) - 1))
-    
-    # Train the 5 core classifiers
+
     classifiers = _get_five_classifiers(knn_k)
     results = {}
     for name, model in classifiers.items():
@@ -548,19 +576,20 @@ def _get_insights_data(df: pd.DataFrame):
             results[name] = _evaluate_classifier(model, X, y)
         except Exception as exc:
             results[name] = {"error": str(exc)}
-    
-    # K-Means
+
     k = df["topic"].nunique()
     kmeans = KMeans(n_clusters=k, random_state=RANDOM_STATE, n_init=10)
     cluster_labels = kmeans.fit_predict(X)
     ari = adjusted_rand_score(df["topic"], cluster_labels)
-    crosstab = pd.crosstab(pd.Series(cluster_labels, name="cluster"), df["topic"].reset_index(drop=True))
-    
-    # PCA
+    crosstab = pd.crosstab(
+        pd.Series(cluster_labels, name="cluster"),
+        df["topic"].reset_index(drop=True),
+    )
+
     pca = PCA(n_components=2, random_state=RANDOM_STATE)
     coords = pca.fit_transform(X.toarray())
     explained = float(pca.explained_variance_ratio_.sum() * 100)
-    
+
     return {
         "X": X,
         "y": y,
@@ -581,332 +610,184 @@ def _get_insights_data(df: pd.DataFrame):
     }
 
 
-def render_model_insights_tab(df: pd.DataFrame, vectorizer_search, X_search, banglish_map, classifier_search) -> None:
-    """Model Insights tab — demonstrates every ML/PR syllabus concept hands-on.
-    
-    This tab is deliberately more information-dense and "dashboard-like" than the
-    Search tab, because its explicit purpose is transparency and teaching — not
-    the minimalist reference interface of the Search tab.
-    """
-    st.markdown("#### মডেল বিশ্লেষণ · Model Insights")
-    st.caption(
-        "This tab exists to demonstrate every ML/PR syllabus concept hands-on, with real numbers "
-        "computed from the real dataset — not static screenshots. এটি সরাসরি ডেটাসেট থেকে "
-        "গণনা করা বাস্তব সংখ্যা সহ হ্যান্ডস-অন প্রদর্শনের জন্য তৈরি।"
-    )
-    
+def render_model_insights_tab(
+    df: pd.DataFrame, vectorizer_search, X_search, banglish_map, classifier_search, lang: str
+) -> None:
+    st.markdown(f"#### {t('mode_lab', lang)}")
+    st.caption(t("lab_intro", lang))
+
     insights = _get_insights_data(df)
     results = insights["results"]
-    X = insights["X"]
-    y = insights["y"]
-    vectorizer = insights["vectorizer"]
     kmeans_data = insights["kmeans"]
-    
-    # ---------------------------------------------------------------------- #
-    # SECTION 1: PIPELINE OVERVIEW
-    # ---------------------------------------------------------------------- #
+    coords = kmeans_data["coords"]
+
+    # ---- Model comparison (Plotly horizontal bar, sorted) ----
     st.markdown("---")
-    st.markdown("#### ১. রিট্রিভাল পাইপলাইন · Pipeline Overview")
-    st.caption(
-        "How a query flows through the system: retrieval (primary) → classification (secondary confirmation). "
-        "কীভাবে একটি প্রশ্ন সিস্টেমের মাধ্যমে প্রবাহিত হয়: রিট্রিভাল (প্রাথমিক) → ক্লাসিফিকেশন (গৌণ নিশ্চিতকরণ)।"
-    )
-    
-    # Visual pipeline using columns
-    pipeline_stages = [
-        ("🔍", "Query\nপ্রশ্ন", COLOR_CARD),
-        ("➡️", "Exact Match\nসঠিক মিল", COLOR_ACCENT_SOFT),
-        ("➡️", "TF-IDF + Cosine\nটেমপ্লেট মিল", COLOR_HAIRLINE),
-        ("➡️", "Fuzzy Match\nঅস্পষ্ট মিল", COLOR_FLAG_BG),
-        ("➡️", "Logistic Regression\nনিশ্চিতকরণ", "#D4D4D4"),
-        ("✅", "Answer\nউত্তর", COLOR_ACCENT_SOFT),
-    ]
-    
-    cols = st.columns(len(pipeline_stages))
-    for i, (icon, label, bg) in enumerate(pipeline_stages):
-        with cols[i]:
-            is_retrieval = i < 4
-            is_classification = i == 4
-            border_color = COLOR_ACCENT if is_retrieval else COLOR_FLAG_INK if is_classification else COLOR_HAIRLINE
-            st.markdown(
-                f"""
-                <div style="
-                    background-color: {bg};
-                    border: 2px solid {border_color};
-                    border-radius: 8px;
-                    padding: 0.6rem 0.3rem;
-                    text-align: center;
-                    font-size: 0.75rem;
-                    min-height: 85px;
-                    display: flex;
-                    flex-direction: column;
-                    justify-content: center;
-                ">
-                    <div style="font-size: 1.4rem;">{icon}</div>
-                    <div style="font-weight: 600; margin-top: 0.2rem; white-space: pre-line;">{label}</div>
-                    {'' if not is_retrieval else '<span style="font-size:0.6rem;color:#2F4858;">(retrieval)</span>'}
-                    {'' if not is_classification else '<span style="font-size:0.6rem;color:#6B4E1F;">(confirmation)</span>'}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    
-    st.caption(
-        "**Retrieval** (exact → TF-IDF → fuzzy) finds the best match. **Classification** (Logistic Regression) "
-        "is a secondary confirmation signal — it never overrides the retrieved answer. "
-        "**রিট্রিভাল** (সঠিক → টিএফ-আইডিএফ → অস্পষ্ট) সবচেয়ে ভালো মিল খুঁজে বের করে। **ক্লাসিফিকেশন** "
-        "(লজিস্টিক রিগ্রেশন) একটি গৌণ নিশ্চিতকরণ সংকেত — এটি কখনই রিট্রিভাল করা উত্তরকে ওভাররাইড করে না।"
-    )
-    
-    # ---------------------------------------------------------------------- #
-    # SECTION 2: CLASSIFIER COMPARISON
-    # ---------------------------------------------------------------------- #
-    st.markdown("---")
-    st.markdown("#### ২. ক্লাসিফায়ার তুলনা · Classifier Comparison")
-    st.caption(
-        "5 core classifiers trained on the same data. একই ডেটাসেটে প্রশিক্ষিত ৫টি মূল ক্লাসিফায়ার।"
-    )
-    
-    valid_results = {n: r for n, r in results.items() if "error" not in r}
-    
-    if valid_results:
-        # Build comparison table
-        table_rows = []
-        for name, r in valid_results.items():
-            cv_str = f"{r['cv_mean_macro_f1']:.3f} ± {r['cv_std_macro_f1']:.3f}" if r["cv_possible"] else "N/A"
-            table_rows.append({
-                "Model": name,
-                "Accuracy": f"{r['train_accuracy']:.3f}",
-                "Precision": f"{r['train_precision']:.3f}",
-                "Recall": f"{r['train_recall']:.3f}",
-                "F1 (Train)": f"{r['train_macro_f1']:.3f}",
-                "F1 (CV)": cv_str,
-            })
-        
-        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
-        
-        # Bar chart ranking by F1 (only if matplotlib is available)
-        if MATPLOTLIB_AVAILABLE:
-            st.markdown("##### F1 স্কোর দ্বারা র্যাঙ্কিং · Ranking by F1 Score")
-            
-            use_cv = any(r["cv_possible"] for r in valid_results.values())
-            rank_key = "cv_mean_macro_f1" if use_cv else "train_macro_f1"
-            rank_label = "CV Macro-F1" if use_cv else "Train Macro-F1"
-            
-            names = list(valid_results.keys())
-            scores = [valid_results[n][rank_key] if not np.isnan(valid_results[n][rank_key]) else 0 for n in names]
-            
-            sorted_pairs = sorted(zip(names, scores), key=lambda x: x[1], reverse=True)
-            names_sorted, scores_sorted = zip(*sorted_pairs)
-            
-            fig, ax = plt.subplots(figsize=(7, 4))
-            bars = ax.bar(names_sorted, scores_sorted, color=COLOR_ACCENT, edgecolor=COLOR_HAIRLINE)
-            ax.set_ylabel(rank_label)
-            ax.set_ylim(0, 1.05)
-            ax.set_title(f"{rank_label} Ranking", fontsize=12)
-            plt.xticks(rotation=25, ha="right", fontsize=8)
-            
-            for bar, s in zip(bars, scores_sorted):
-                ax.text(bar.get_x() + bar.get_width()/2, s + 0.02, f"{s:.2f}", ha="center", fontsize=8, color=COLOR_INK)
-            
-            fig, ax = _style_matplotlib_fig(fig, ax)
-            st.pyplot(fig)
-            plt.close(fig)
-        else:
-            st.info("Matplotlib is not available. Bar chart visualization is disabled.")
-        
-        # Confusion matrix picker
-        if MATPLOTLIB_AVAILABLE:
-            st.markdown("##### কনফিউশন ম্যাট্রিক্স · Confusion Matrix")
-            model_names = list(valid_results.keys())
-            selected_model = st.selectbox(
-                bilingual_plain("Select a model to view its confusion matrix", "কনফিউশন ম্যাট্রিক্স দেখতে একটি মডেল নির্বাচন করুন"),
-                model_names,
-                key="cm_picker"
-            )
-            
-            if selected_model in valid_results:
-                r = valid_results[selected_model]
-                cm = r["confusion_matrix"]
-                classes = r["classes"]
-                
-                fig, ax = plt.subplots(figsize=(6, 5))
-                im = ax.imshow(cm, cmap="Blues")
-                ax.set_xticks(np.arange(len(classes)))
-                ax.set_yticks(np.arange(len(classes)))
-                ax.set_xticklabels([c.replace("_", " ") for c in classes], rotation=45, ha="right", fontsize=7)
-                ax.set_yticklabels([c.replace("_", " ") for c in classes], fontsize=7)
-                ax.set_xlabel("Predicted", fontsize=9)
-                ax.set_ylabel("True", fontsize=9)
-                ax.set_title(f"{selected_model} — Confusion Matrix", fontsize=11)
-                
-                for i in range(len(classes)):
-                    for j in range(len(classes)):
-                        ax.text(j, i, str(cm[i, j]), ha="center", va="center", color="black" if cm[i, j] < cm.max()/2 else "white", fontsize=8)
-                
-                fig, ax = _style_matplotlib_fig(fig, ax)
-                st.pyplot(fig)
-                plt.close(fig)
-        else:
-            st.info("Matplotlib is not available. Confusion matrix visualization is disabled.")
-        
-        # Why Logistic Regression
-        st.markdown("##### কেন লজিস্টিক রিগ্রেশন? · Why Logistic Regression?")
-        st.caption(
-            "**Logistic Regression** runs the live Search tab. It is not necessarily the single highest "
-            "score in the chart above — the pick is justified by cross-validation stability (low variance "
-            "across folds), not the top raw number from one lucky split. Logistic Regression and Naive Bayes "
-            "are the classic low-variance choices on small, sparse TF-IDF data; higher-capacity models "
-            "(Decision Tree, Random Forest) tend to need substantially more training rows before their extra "
-            "flexibility pays off rather than overfits.\n\n"
-            "**লজিস্টিক রিগ্রেশন** লাইভ সার্চ ট্যাব চালায়। এটি উপরের চার্টে সর্বোচ্চ স্কোর নয় — বরং "
-            "ক্রস-ভ্যালিডেশন স্থিতিশীলতা (কম ভ্যারিয়েন্স) এর জন্য নির্বাচিত, একক স্প্লিট থেকে প্রাপ্ত "
-            "সর্বোচ্চ সংখ্যা নয়। লজিস্টিক রিগ্রেশন এবং নাইভ বেইজ হল ছোট, স্পার্স টিএফ-আইডিএফ ডেটার "
-            "জন্য ক্লাসিক কম-ভ্যারিয়েন্স পছন্দ; উচ্চ-ক্ষমতার মডেলগুলির (ডিসিশন ট্রি, র্যান্ডম ফরেস্ট) "
-            "জন্য যথেষ্ট বেশি প্রশিক্ষণ ডেটা প্রয়োজন হয় ওভারফিটিং এড়ানোর জন্য।"
+    st.markdown("##### Which model best predicts an unseen ruling’s category?")
+    model_names, f1_vals, acc_vals = [], [], []
+    for name, r in results.items():
+        if "error" not in r:
+            model_names.append(name)
+            f1_vals.append(r["train_macro_f1"])
+            acc_vals.append(r["train_accuracy"])
+
+    if model_names:
+        order = np.argsort(f1_vals)[::-1]
+        model_names = [model_names[i] for i in order]
+        f1_vals = [f1_vals[i] for i in order]
+        acc_vals = [acc_vals[i] for i in order]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=model_names, x=f1_vals, orientation="h",
+            name="Macro-F1", marker_color=PLOTLY_SAFE[0],
+            hovertemplate="%{y}<br>Macro-F1: %{x:.3f}<extra></extra>",
+        ))
+        fig.update_layout(
+            title="Model comparison — higher is better",
+            xaxis_title="Macro-averaged F1 score",
+            yaxis_title="Classifier",
+            height=320,
+            margin=dict(l=20, r=20, t=40, b=20),
+            paper_bgcolor=COLOR_PAPER,
+            plot_bgcolor=COLOR_PAPER,
+            font=dict(color=COLOR_INK),
         )
-    
-    # ---------------------------------------------------------------------- #
-    # SECTION 3: K-MEANS CLUSTERING
-    # ---------------------------------------------------------------------- #
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.caption(t("why_logreg", lang))
+
+        # Confusion matrix
+        st.markdown("##### Where the model confuses one ruling category for another")
+        selected = st.selectbox(
+            "Model for confusion matrix",
+            model_names,
+            index=0,
+            key="cm_model",
+        )
+        r = results.get(selected, {})
+        if "confusion_matrix" in r:
+            cm = r["confusion_matrix"]
+            classes = [c.replace("_", " ") for c in r["classes"]]
+            fig_cm = px.imshow(
+                cm,
+                x=classes, y=classes,
+                color_continuous_scale="Blues",
+                labels=dict(x="Predicted", y="True", color="Count"),
+                text_auto=True,
+                aspect="auto",
+            )
+            fig_cm.update_layout(
+                title=f"Confusion matrix — {selected}",
+                paper_bgcolor=COLOR_PAPER,
+                plot_bgcolor=COLOR_PAPER,
+                font=dict(color=COLOR_INK),
+                height=420,
+                margin=dict(l=20, r=20, t=40, b=20),
+            )
+            st.plotly_chart(fig_cm, use_container_width=True)
+            if r.get("cv_possible"):
+                st.caption(
+                    f"Cross-validation ({r['cv_k']}-fold) macro-F1: "
+                    f"{r['cv_mean_macro_f1']:.3f} ± {r['cv_std_macro_f1']:.3f}. "
+                    "Small classes remain provisional until more examples are available."
+                )
+            else:
+                st.caption(
+                    "Cross-validation not yet reliable (at least one class has too few examples). "
+                    "Treat these numbers as illustrative only."
+                )
+
+    # ---- K-Means ----
     st.markdown("---")
-    st.markdown("#### ৩. কে-মিনস ক্লাস্টারিং · K-Means Clustering")
-    st.caption(
-        "Unsupervised learning: the algorithm groups similar texts on its own. "
-        "আনসুপারভাইসড লার্নিং: অ্যালগরিদম নিজেই অনুরূপ টেক্সট গোষ্ঠীভুক্ত করে।"
+    st.markdown("##### Do unsupervised clusters align with human topic labels?")
+    fig_k = go.Figure()
+    unique_clusters = sorted(set(kmeans_data["cluster_labels"]))
+    for i, c in enumerate(unique_clusters):
+        mask = kmeans_data["cluster_labels"] == c
+        fig_k.add_trace(go.Scatter(
+            x=coords[mask, 0], y=coords[mask, 1],
+            mode="markers", name=f"Cluster {c}",
+            marker=dict(size=8, color=PLOTLY_SAFE[i % len(PLOTLY_SAFE)]),
+            hovertemplate="Cluster %{text}<br>PC1=%{x:.2f}<br>PC2=%{y:.2f}<extra></extra>",
+            text=[str(c)] * mask.sum(),
+        ))
+    fig_k.update_layout(
+        title="K-Means clusters in PCA space",
+        xaxis_title="Principal component 1",
+        yaxis_title="Principal component 2",
+        paper_bgcolor=COLOR_PAPER,
+        plot_bgcolor=COLOR_PAPER,
+        font=dict(color=COLOR_INK),
+        height=380,
+        margin=dict(l=20, r=20, t=40, b=20),
     )
-    
-    if MATPLOTLIB_AVAILABLE:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4.5))
-        
-        # Plot 1: Colored by K-Means cluster
-        palette = plt.get_cmap("tab10")
-        coords = kmeans_data["coords"]
-        cluster_labels = kmeans_data["cluster_labels"]
-        unique_clusters = sorted(set(cluster_labels))
-        for i, c in enumerate(unique_clusters):
-            mask = cluster_labels == c
-            ax1.scatter(coords[mask, 0], coords[mask, 1], s=35, alpha=0.8,
-                       color=palette(i % 10), label=f"Cluster {c}", edgecolor="white", linewidth=0.3)
-        ax1.set_xlabel("PC1"); ax1.set_ylabel("PC2")
-        ax1.set_title("K-Means Clusters", fontsize=10)
-        ax1.legend(fontsize=6, loc="best")
-        
-        # Plot 2: Colored by true topic
-        topics = insights["topic"]
-        unique_topics = sorted(topics.unique())
-        for i, t in enumerate(unique_topics):
-            mask = (topics == t).to_numpy()
-            ax2.scatter(coords[mask, 0], coords[mask, 1], s=35, alpha=0.8,
-                       color=palette(i % 10), label=t.replace("_", " "), edgecolor="white", linewidth=0.3)
-        ax2.set_xlabel("PC1"); ax2.set_ylabel("PC2")
-        ax2.set_title("True Topic Labels", fontsize=10)
-        ax2.legend(fontsize=6, loc="best")
-        
-        fig, (ax1, ax2) = _style_matplotlib_fig(fig, ax1), _style_matplotlib_fig(fig, ax2)
-        fig.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-    else:
-        st.info("Matplotlib is not available. Cluster visualization is disabled.")
-    
+    st.plotly_chart(fig_k, use_container_width=True)
+
     ari = kmeans_data["ari"]
     ari_pct = max(0, (ari + 1) / 2 * 100)
     st.caption(
-        f"**Adjusted Rand Index (ARI):** {ari:.3f} — the algorithm's own groupings matched the human topic "
-        f"labels about {ari_pct:.0f}% of the way (1.0 = perfect match, 0.0 = random).\n\n"
-        f"**সমন্বিত র্যান্ড ইনডেক্স (ARI):** {ari:.3f} — অ্যালগরিদমের নিজস্ব গোষ্ঠীভুক্তি মানব-নির্ধারিত "
-        f"টপিক লেবেলের সাথে প্রায় {ari_pct:.0f}% মিলেছে (1.0 = নিখুঁত মিল, 0.0 = এলোমেলো)।"
+        f"Adjusted Rand Index (ARI): {ari:.3f} — the algorithm’s own groupings matched the human "
+        f"topic labels about {ari_pct:.0f}% of the way (1.0 = perfect, 0.0 = random)."
     )
-    
-    with st.expander(bilingual_plain("Cluster vs. topic cross-tabulation", "ক্লাস্টার ও টপিকের ক্রস-ট্যাবুলেশন")):
+    with st.expander("Cluster vs. topic cross-tabulation"):
         st.dataframe(kmeans_data["crosstab"], use_container_width=True)
-    
-    # ---------------------------------------------------------------------- #
-    # SECTION 4: PCA VISUALIZATION
-    # ---------------------------------------------------------------------- #
+
+    # ---- PCA ----
     st.markdown("---")
-    st.markdown("#### ৪. পিসিএ ভিজুয়ালাইজেশন · PCA Visualization")
-    st.caption(
-        "Principal Component Analysis: reducing high-dimensional text data to 2D. "
-        "প্রিন্সিপাল কম্পোনেন্ট অ্যানালাইসিস: উচ্চ-মাত্রিক টেক্সট ডেটাকে ২ডিতে রূপান্তর।"
+    st.markdown("##### How the rulings sit in a simplified 2-D view of the text space")
+    fig_pca = go.Figure()
+    unique_classes = sorted(insights["tier1_class"].unique())
+    for i, c in enumerate(unique_classes):
+        mask = (insights["tier1_class"] == c).to_numpy()
+        fig_pca.add_trace(go.Scatter(
+            x=coords[mask, 0], y=coords[mask, 1],
+            mode="markers", name=c.replace("_", " "),
+            marker=dict(size=9, color=PLOTLY_SAFE[i % len(PLOTLY_SAFE)]),
+            hovertemplate="%{text}<br>PC1=%{x:.2f}<br>PC2=%{y:.2f}<extra></extra>",
+            text=[c.replace("_", " ")] * mask.sum(),
+        ))
+    fig_pca.update_layout(
+        title=f"PCA projection — {kmeans_data['explained']:.1f}% variance explained by these two axes",
+        xaxis_title="Principal component 1",
+        yaxis_title="Principal component 2",
+        paper_bgcolor=COLOR_PAPER,
+        plot_bgcolor=COLOR_PAPER,
+        font=dict(color=COLOR_INK),
+        height=420,
+        margin=dict(l=20, r=20, t=40, b=20),
     )
-    
-    if MATPLOTLIB_AVAILABLE:
-        fig, ax = plt.subplots(figsize=(7, 5))
-        tier1_classes = insights["tier1_class"]
-        unique_classes = sorted(tier1_classes.unique())
-        for i, c in enumerate(unique_classes):
-            mask = (tier1_classes == c).to_numpy()
-            ax.scatter(coords[mask, 0], coords[mask, 1], s=40, alpha=0.85,
-                       color=palette(i % 10), label=c.replace("_", " "), edgecolor="white", linewidth=0.4)
-        ax.set_xlabel("PC1", fontsize=10)
-        ax.set_ylabel("PC2", fontsize=10)
-        ax.set_title(f"PCA: {kmeans_data['explained']:.1f}% variance explained", fontsize=11)
-        ax.legend(fontsize=7, loc="best")
-        
-        fig, ax = _style_matplotlib_fig(fig, ax)
-        st.pyplot(fig)
-        plt.close(fig)
-    else:
-        st.info("Matplotlib is not available. PCA visualization is disabled.")
-    
+    st.plotly_chart(fig_pca, use_container_width=True)
     st.caption(
-        f"**{kmeans_data['explained']:.1f}%** of the total variance in the TF-IDF vectors is captured by "
-        f"these 2 dimensions — the rest is spread across dimensions we can't easily draw on a flat page. "
-        f"আমরা এখানে যে ২টি মাত্রা দেখছি তা টিএফ-আইডিএফ ভেক্টরগুলির মোট ভ্যারিয়েন্সের "
-        f"**{kmeans_data['explained']:.1f}%** ধারণ করছে — বাকিটা এমন মাত্রায় ছড়িয়ে আছে যা আমরা "
-        f"সহজে আঁকতে পারি না।"
+        f"{kmeans_data['explained']:.1f}% of the total variance in the TF-IDF vectors is captured "
+        "by these two dimensions — the rest is spread across dimensions we cannot easily draw."
     )
-    
-    # ---------------------------------------------------------------------- #
-    # SECTION 5: LIVE TRY-IT
-    # ---------------------------------------------------------------------- #
+
+    # ---- Live Try-It ----
     st.markdown("---")
-    st.markdown("#### ৫. লাইভ ট্রাই-ইট · Live Try-It")
-    st.caption(
-        "Type any question and see exactly how the system thinks — stage by stage. "
-        "যেকোনো প্রশ্ন লিখুন এবং দেখুন সিস্টেমটি কীভাবে চিন্তা করে — ধাপে ধাপে।"
-    )
-    
-    # Use the search-classifier's vectorizer and X for retrieval, but the insights
-    # classifiers for the comparison
+    st.markdown("##### Live Try-It")
     live_query = st.text_input(
-        bilingual_plain("Type your question to analyze", "বিশ্লেষণের জন্য আপনার প্রশ্ন লিখুন"),
-        placeholder="e.g. is fasting mandatory during Ramadan? · রমজানে রোজা কি ফরজ?",
+        t("type_question", lang),
+        placeholder=t("search_placeholder", lang),
         key="live_try_input",
-        label_visibility="visible"
     )
-    
     if live_query.strip():
-        # Run retrieval
         result = retrieve_candidates(live_query, df, vectorizer_search, X_search, banglish_map)
-        
-        col1, col2 = st.columns([1, 1])
-        
+        col1, col2 = st.columns(2)
         with col1:
             st.markdown("**Retrieval Result**")
             if result.row is not None:
-                stage_en, stage_bn = STAGE_LABELS.get(result.stage, (result.stage, result.stage))
-                st.markdown(f"✅ Matched via: **{stage_en}** · {stage_bn}")
+                stage_en, stage_bn, stage_ar = STAGE_LABELS.get(
+                    result.stage, (result.stage, result.stage, result.stage)
+                )
+                stage = stage_en if lang == "en" else (stage_bn if lang == "bn" else stage_ar)
+                st.markdown(f"Matched via: **{stage}**")
                 st.markdown(f"Score: **{result.similarity:.3f}**")
                 st.markdown(f"Ruling: **{result.row['tier1_class'].replace('_', ' ')}**")
-                if result.row.get("question_en"):
-                    st.markdown(f"\"{result.row['question_en']}\"")
             else:
-                st.markdown("❌ No confident match found")
-                if result.suggestions:
-                    st.markdown("Closest suggestions:")
-                    for r in result.suggestions[:3]:
-                        st.markdown(f"- {r['tier1_class'].replace('_', ' ')}: {r['question_en'] or r['question_bn']}")
-        
+                st.markdown(t("no_match_heading", lang))
         with col2:
-            st.markdown("**All 5 Classifiers' Predictions**")
-            
-            # Get predictions from each of the 5 classifiers
-            insights = _get_insights_data(df)
-            results = insights["results"]
-            
+            st.markdown("**All 5 Classifiers’ Predictions**")
             preds = {}
             for name, r in results.items():
                 if "error" not in r:
@@ -914,312 +795,18 @@ def render_model_insights_tab(df: pd.DataFrame, vectorizer_search, X_search, ban
                         q_clean = clean_text(live_query)
                         if q_clean.strip():
                             q_vec = insights["vectorizer"].transform([q_clean])
-                            pred = r["model"].predict(q_vec)[0]
-                            preds[name] = pred
-                        else:
-                            preds[name] = None
+                            preds[name] = r["model"].predict(q_vec)[0]
                     except Exception:
                         preds[name] = None
-                else:
-                    preds[name] = None
-            
-            # Show predictions
             for name, pred in preds.items():
                 if pred:
-                    display_name = name.replace(" Logistic", "").replace(" Naive", "").replace(" Decision", "")
-                    st.markdown(f"{display_name}: **{pred.replace('_', ' ')}**")
+                    st.markdown(f"{name}: **{pred.replace('_', ' ')}**")
                 else:
                     st.markdown(f"{name}: _unavailable_")
-            
-            # Agreement check
-            if result.row is not None:
-                true_label = result.row["tier1_class"]
-                agreeing = [name for name, pred in preds.items() if pred == true_label]
-                if agreeing:
-                    st.success(f"✅ {len(agreeing)}/{len(preds)} classifiers agree with the retrieved ruling")
-                else:
-                    st.warning("⚠️ No classifier agrees with the retrieved ruling — the retrieval stage is doing the work here.")
 
 
 # --------------------------------------------------------------------------- #
-# UI — DESIGN TOKENS & STYLE
-# --------------------------------------------------------------------------- #
-
-def inject_css() -> None:
-    st.markdown(
-        """
-        <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
-
-        :root {
-            --paper: #F2ECDD;
-            --card: #FBF8EF;
-            --ink: #2B2A24;
-            --ink-muted: #544F42;
-            --accent: #2F4858;
-            --accent-soft: #E4DEC9;
-            --hairline: #DDD3B8;
-            --flag-bg: #F3E6C8;
-            --flag-ink: #6B4E1F;
-            --font-display: 'Noto Serif Bengali', Georgia, serif;
-            --font-body: 'Noto Sans Bengali', 'Inter', sans-serif;
-            --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-            --space-1: 0.4rem;
-            --space-2: 0.8rem;
-            --space-3: 1.4rem;
-            --space-4: 2.2rem;
-            --space-5: 3.2rem;
-        }
-
-        html, body, [class*="css"] {
-            background-color: var(--paper) !important;
-            color: var(--ink);
-            font-family: var(--font-body);
-        }
-        .block-container { max-width: 700px; padding-top: var(--space-4); padding-bottom: var(--space-5); }
-        #MainMenu, header[data-testid="stHeader"], footer { visibility: hidden; }
-
-        a:focus-visible, button:focus-visible, input:focus-visible {
-            outline: 2px solid var(--accent);
-            outline-offset: 2px;
-        }
-        @media (prefers-reduced-motion: reduce) {
-            * { animation: none !important; transition: none !important; }
-        }
-
-        .app-eyebrow {
-            font-family: var(--font-mono);
-            font-size: 0.72rem;
-            letter-spacing: 0.22em;
-            text-transform: uppercase;
-            color: var(--ink-muted);
-            margin-bottom: var(--space-1);
-        }
-        .app-title {
-            font-family: var(--font-display);
-            font-weight: 700;
-            font-size: 2.1rem;
-            color: var(--ink);
-            margin-bottom: var(--space-1);
-            line-height: 1.15;
-        }
-        .app-subtitle {
-            font-family: var(--font-body);
-            color: var(--ink-muted);
-            font-size: 0.95rem;
-        }
-        .app-rule {
-            border: none;
-            border-top: 1px solid var(--hairline);
-            margin: var(--space-3) 0 var(--space-4) 0;
-        }
-
-        .bn-inline {
-            font-family: var(--font-body);
-            color: var(--ink-muted);
-        }
-        .en-line { display: block; color: var(--ink); }
-        .bn-line {
-            display: block;
-            color: var(--ink);
-            margin-top: 0.2rem;
-            font-size: 0.97em;
-        }
-
-        .field-label {
-            font-family: var(--font-body);
-            font-size: 0.85rem;
-            color: var(--ink-muted);
-            margin-bottom: 0.35rem;
-        }
-        div[data-testid="stTextInput"] input {
-            background-color: var(--card);
-            border: 1px solid var(--hairline);
-            border-radius: 3px;
-            color: var(--ink);
-            font-size: 1.08rem;
-            padding: 0.85rem 1rem;
-        }
-        div[data-testid="stTextInput"] input:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 1px var(--accent);
-        }
-        div[data-testid="stTextInput"] input::placeholder { color: var(--ink-muted); opacity: 0.8; }
-
-        .stButton > button {
-            background-color: var(--accent);
-            color: var(--card);
-            border: none;
-            border-radius: 3px;
-            padding: 0.5rem 1.2rem;
-            font-family: var(--font-body);
-            font-weight: 500;
-            font-size: 0.88rem;
-            letter-spacing: 0.02em;
-            transition: background-color 120ms ease;
-        }
-        .stButton > button:hover { background-color: #24394A; color: var(--card); }
-
-        div[role="radiogroup"] { gap: var(--space-3); }
-        div[role="radiogroup"] label {
-            font-family: var(--font-mono);
-            font-size: 0.78rem;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: var(--ink-muted);
-        }
-
-        @keyframes entryFadeIn {
-            from { opacity: 0; transform: translateY(4px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .entry {
-            background-color: var(--card);
-            border: 1px solid var(--hairline);
-            border-radius: 3px;
-            padding: var(--space-3) var(--space-3) var(--space-2) var(--space-3);
-            margin-top: var(--space-3);
-            animation: entryFadeIn 220ms ease-out;
-        }
-        .entry-refno {
-            font-family: var(--font-mono);
-            font-size: 0.72rem;
-            color: var(--ink-muted);
-            letter-spacing: 0.05em;
-            margin-bottom: var(--space-2);
-        }
-        .entry-question {
-            font-family: var(--font-display);
-            font-size: 1.2rem;
-            font-weight: 600;
-            line-height: 1.4;
-            margin-bottom: 0.3rem;
-        }
-        .entry-question-en {
-            font-family: var(--font-body);
-            font-size: 0.92rem;
-            color: var(--ink-muted);
-            margin-bottom: var(--space-2);
-        }
-        .category-label {
-            font-family: var(--font-body);
-            font-size: 0.8rem;
-            font-weight: 600;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: var(--ink);
-            border-left: 3px solid var(--accent);
-            padding: 0.2rem 0 0.2rem 0.65rem;
-            margin: var(--space-2) 0 var(--space-3) 0;
-        }
-        .category-mark { color: var(--accent); margin-right: 0.4rem; font-weight: 400; }
-
-        .explanation-text { font-size: 0.99rem; line-height: 1.6; margin-bottom: var(--space-2); }
-
-        .citation-block {
-            border-left: 2px solid var(--hairline);
-            padding: 0.45rem 0 0.45rem 0.85rem;
-            color: var(--ink-muted);
-            font-size: 0.88rem;
-            font-style: italic;
-            margin-bottom: var(--space-2);
-        }
-        .citation-source {
-            display: block;
-            font-family: var(--font-mono);
-            font-style: normal;
-            font-size: 0.76rem;
-            color: var(--ink-muted);
-            margin-top: 0.25rem;
-            letter-spacing: 0.02em;
-        }
-
-        .verification-flag {
-            display: inline-block;
-            font-family: var(--font-mono);
-            font-size: 0.72rem;
-            color: var(--flag-ink);
-            background-color: var(--flag-bg);
-            border: 1px solid #E0CD9C;
-            border-radius: 2px;
-            padding: 0.15rem 0.5rem;
-            margin-bottom: var(--space-2);
-            letter-spacing: 0.02em;
-        }
-
-        .related-heading {
-            font-family: var(--font-mono);
-            font-size: 0.72rem;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            color: var(--ink-muted);
-            margin: var(--space-2) 0 0.35rem 0;
-            border-top: 1px solid var(--hairline);
-            padding-top: var(--space-2);
-        }
-
-        .no-match-box {
-            background-color: var(--card);
-            border: 1px dashed var(--hairline);
-            border-radius: 3px;
-            padding: var(--space-3);
-            margin-top: var(--space-3);
-        }
-        .no-match-heading {
-            font-family: var(--font-display);
-            font-size: 1.05rem;
-            margin-bottom: 0.3rem;
-        }
-        .no-match-body { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: var(--space-2); }
-
-        div[data-testid="stButton"] button[kind="secondary"] {
-            background-color: transparent;
-            color: var(--ink);
-            border: none;
-            border-bottom: 1px solid var(--hairline);
-            border-radius: 0;
-            text-align: left;
-            width: 100%;
-            padding: 0.55rem 0.1rem;
-            font-family: var(--font-body);
-            font-weight: 400;
-            font-size: 0.92rem;
-        }
-        div[data-testid="stButton"] button[kind="secondary"]:hover {
-            background-color: var(--accent-soft);
-            color: var(--ink);
-        }
-
-        .browse-count {
-            font-family: var(--font-mono);
-            font-size: 0.78rem;
-            color: var(--ink-muted);
-            letter-spacing: 0.05em;
-            margin: var(--space-2) 0 var(--space-1) 0;
-        }
-
-        .app-footer {
-            margin-top: var(--space-5);
-            padding-top: var(--space-2);
-            border-top: 1px solid var(--hairline);
-            color: var(--ink-muted);
-            font-size: 0.8rem;
-            line-height: 1.5;
-        }
-
-        @media (max-width: 480px) {
-            .block-container { padding-left: 1.1rem; padding-right: 1.1rem; }
-            .app-title { font-size: 1.6rem; }
-            .entry { padding: var(--space-2); }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# --------------------------------------------------------------------------- #
-# UI — RENDERING
+# UI RENDERING
 # --------------------------------------------------------------------------- #
 
 def _explanation_for(row: pd.Series) -> str:
@@ -1232,34 +819,62 @@ def _explanation_for(row: pd.Series) -> str:
 
 
 def _set_pending_query(text: str) -> None:
-    """Route a click on a related/suggested entry back into the search box."""
     st.session_state["pending_query"] = text
     st.rerun()
 
 
-def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classifier) -> None:
-    row = result.row
-    st.markdown('<div class="entry">', unsafe_allow_html=True)
+def _citation_plain(row: pd.Series) -> str:
+    parts = []
+    ref_ar = str(row.get("reference_text_ar", "")).strip()
+    if ref_ar:
+        parts.append(ref_ar)
+    ref_text = str(row.get("reference_text", "")).strip()
+    if ref_text and ref_text != PLACEHOLDER_REFERENCE_TEXT:
+        parts.append(ref_text)
+    ref_source = str(row.get("reference_source", "")).strip()
+    if ref_source:
+        parts.append(f"— {ref_source}")
+    return "\n".join(parts) if parts else ref_source
 
-    st.markdown(f'<div class="entry-refno">Ref. No. {int(row["id"]):04d}</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="entry-question">{row["question_bn"]}</div>', unsafe_allow_html=True)
-    if str(row.get("question_en", "")).strip():
-        st.markdown(f'<div class="entry-question-en">{row["question_en"]}</div>', unsafe_allow_html=True)
+
+def render_result(
+    result: RetrievalResult,
+    df: pd.DataFrame,
+    vectorizer,
+    classifier,
+    lang: str,
+) -> None:
+    row = result.row
+    rid = int(row["id"])
+
+    st.markdown('<div class="entry">', unsafe_allow_html=True)
+    st.markdown(f'<div class="entry-refno">Ref. No. {rid:04d}</div>', unsafe_allow_html=True)
+
+    # Question (prefer language order)
+    q_bn = str(row.get("question_bn", "")).strip()
+    q_en = str(row.get("question_en", "")).strip()
+    q_ar = str(row.get("question_ar", "")).strip()
+    if lang == "ar" and q_ar:
+        st.markdown(f'<div class="entry-question ar-text" dir="rtl">{q_ar}</div>', unsafe_allow_html=True)
+    elif lang == "bn" and q_bn:
+        st.markdown(f'<div class="entry-question">{q_bn}</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="entry-question">{q_en or q_bn}</div>', unsafe_allow_html=True)
+        if q_bn and q_en and lang == "en":
+            st.markdown(f'<div class="entry-question-en">{q_bn}</div>', unsafe_allow_html=True)
 
     tier1 = str(row["tier1_class"])
-    label = tier1.replace("_", " ")
-    label_bn = TIER1_CLASS_BN.get(tier1, "")
+    label = tier1_display(tier1, lang)
     strictness = str(row.get("strictness_label", "")).strip()
     label_text = f"{label} — {strictness}" if strictness else label
     st.markdown(
-        f'<div class="category-label"><span class="category-mark">{SECTION_MARK}</span>{label_text}'
-        f'<span class="bn-inline"> · {label_bn}</span></div>',
+        f'<div class="category-label"><span class="category-mark">{SECTION_MARK}</span>{label_text}</div>',
         unsafe_allow_html=True,
     )
 
     if str(row.get("verification_status", "")).strip() == NEEDS_VERIFICATION_LABEL:
         st.markdown(
-            f'<div class="verification-flag">{bilingual("Unverified reference — pending scholarly check", "যাচাই বাকি — বিশেষজ্ঞ পর্যালোচনার অপেক্ষায়")}</div>',
+            f'<div class="verification-flag">{t("unverified", lang)}</div>',
             unsafe_allow_html=True,
         )
 
@@ -1267,115 +882,145 @@ def render_result(result: RetrievalResult, df: pd.DataFrame, vectorizer, classif
     if explanation:
         st.markdown(f'<div class="explanation-text">{explanation}</div>', unsafe_allow_html=True)
 
+    # Citation block (Arabic first when present)
+    ref_ar = str(row.get("reference_text_ar", "")).strip()
     ref_text = str(row.get("reference_text", "")).strip()
     ref_source = str(row.get("reference_source", "")).strip()
+
+    citation_html = '<div class="citation-block">'
+    if ref_ar:
+        citation_html += f'<div class="ar-text" dir="rtl">{ref_ar}</div>'
     if ref_text and ref_text != PLACEHOLDER_REFERENCE_TEXT:
-        st.markdown(
-            f'<div class="citation-block">{ref_text}<span class="citation-source">{ref_source}</span></div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(f'<div class="citation-block"><span class="citation-source">{ref_source}</span></div>', unsafe_allow_html=True)
+        citation_html += f"{ref_text}"
+    if ref_source:
+        citation_html += f'<span class="citation-source">{ref_source}</span>'
+    citation_html += "</div>"
+    st.markdown(citation_html, unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Actions: save + copy
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
+        bookmarks = st.session_state.setdefault("bookmarks", set())
+        is_saved = rid in bookmarks
+        if st.button(
+            t("unsave_session", lang) if is_saved else t("save_session", lang),
+            key=f"save_{rid}",
+            type="secondary",
+        ):
+            if is_saved:
+                bookmarks.discard(rid)
+            else:
+                bookmarks.add(rid)
+            st.session_state["bookmarks"] = bookmarks
+            st.rerun()
+    with col_b:
+        citation = _citation_plain(row)
+        if st.button(t("copy_citation", lang), key=f"copy_{rid}", type="secondary"):
+            st.session_state["last_copied"] = citation
+            st.toast("Citation ready — select & copy from the box below")
+        if st.session_state.get("last_copied") == citation:
+            st.code(citation, language=None)
+
+    # Related
     related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
     if not related.empty:
-        st.markdown(
-            f'<div class="related-heading">{bilingual("Related entries", "সম্পর্কিত মাসআলা")}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="related-heading">{t("related_heading", lang)}</div>', unsafe_allow_html=True)
         for i, r in related.iterrows():
-            label_r = str(r["tier1_class"]).replace("_", " ")
+            label_r = tier1_display(str(r["tier1_class"]), lang)
             display_text = r["question_en"] or r["question_bn"]
-            if st.button(f"{label_r} — {display_text}", key=f"related_{row['id']}_{i}", type="secondary"):
+            if st.button(f"{label_r} — {display_text}", key=f"related_{rid}_{i}", type="secondary"):
                 _set_pending_query(str(r["question_en"] or r["question_bn"]))
 
-    with st.expander(bilingual_plain("Apparatus — how this was matched", "মিলের বিবরণ")):
-        stage_en, stage_bn = STAGE_LABELS.get(result.stage, (result.stage, result.stage))
-        st.write(f"Matched via / মিলের ধরন: **{stage_en} · {stage_bn}**")
-        st.write(f"Match confidence / মিলের মাত্রা: **{result.similarity:.2f}**")
+    with st.expander(t("apparatus", lang)):
+        stage_en, stage_bn, stage_ar = STAGE_LABELS.get(
+            result.stage, (result.stage, result.stage, result.stage)
+        )
+        stage = stage_en if lang == "en" else (stage_bn if lang == "bn" else stage_ar)
+        st.write(f"**{stage}** · {result.similarity:.2f}")
         predicted = classify_query(str(row["question_en"] or row["question_bn"]), vectorizer, classifier)
         if predicted is not None:
-            agree_en = "agrees" if predicted == row["tier1_class"] else "disagrees"
-            agree_bn = "মিলছে" if predicted == row["tier1_class"] else "মিলছে না"
-            st.write(
-                f"Classifier's independent prediction / মডেলের পৃথক পূর্বাভাস: "
-                f"**{predicted.replace('_', ' ')}** ({agree_en} · {agree_bn})"
-            )
+            agree = "agrees" if predicted == row["tier1_class"] else "disagrees"
+            st.write(f"Classifier prediction: **{predicted.replace('_', ' ')}** ({agree})")
         else:
-            st.write(
-                "Classifier confirmation unavailable / মডেলের নিশ্চিতকরণ পাওয়া যায়নি "
-                "(not enough training data yet / এখনও পর্যাপ্ত প্রশিক্ষণ তথ্য নেই)."
-            )
+            st.write("Classifier confirmation unavailable.")
 
 
-def render_no_match(result: RetrievalResult) -> None:
+def render_no_match(result: RetrievalResult, lang: str) -> None:
     st.markdown('<div class="no-match-box">', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="no-match-heading">{bilingual_block("No confident match in the reference set.", "নির্ভরযোগ্য কোনো মিল পাওয়া যায়নি।")}</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f'<div class="no-match-body">{bilingual_block("Try different wording, or open one of the closest entries below.", "অন্যভাবে লিখে চেষ্টা করুন, অথবা নিচের কাছাকাছি এন্ট্রিগুলো দেখুন।")}</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="no-match-heading">{t("no_match_heading", lang)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="no-match-body">{t("no_match_body", lang)}</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     if result.suggestions:
-        st.markdown(
-            f'<div class="related-heading">{bilingual("Closest entries", "কাছাকাছি এন্ট্রি")}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="related-heading">{t("closest_heading", lang)}</div>', unsafe_allow_html=True)
         for i, r in enumerate(result.suggestions):
-            label = str(r["tier1_class"]).replace("_", " ")
+            label = tier1_display(str(r["tier1_class"]), lang)
             display_text = r["question_en"] or r["question_bn"]
             if st.button(f"{label} — {display_text}", key=f"suggestion_{i}", type="secondary"):
                 _set_pending_query(str(r["question_en"] or r["question_bn"]))
 
 
-def render_browse_mode(df: pd.DataFrame) -> None:
-    topic_options = ["All · সব"] + [
-        f"{t} · {TOPIC_BN.get(t, '')}" for t in sorted(df["topic"].unique().tolist())
+def render_browse_mode(df: pd.DataFrame, lang: str) -> None:
+    topic_options = [t("all_option", lang)] + [
+        f"{topic_display(tpc, lang)}" for tpc in sorted(df["topic"].unique().tolist())
     ]
-    class_options = ["All · সব"] + [
-        f"{c} · {TIER1_CLASS_BN.get(c, '')}" for c in sorted(df["tier1_class"].unique().tolist())
+    class_options = [t("all_option", lang)] + [
+        tier1_display(c, lang) for c in sorted(df["tier1_class"].unique().tolist())
     ]
+    arabic_options = [t("all_option", lang), t("has_arabic_filter", lang)]
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown(f'<div class="field-label">{bilingual("Topic", "বিষয়")}</div>', unsafe_allow_html=True)
-        topic_choice = st.selectbox("Topic", topic_options, label_visibility="collapsed")
+        st.markdown(f'<div class="field-label">{t("topic_label", lang)}</div>', unsafe_allow_html=True)
+        topic_choice = st.selectbox("Topic", topic_options, label_visibility="collapsed", key="browse_topic")
     with col2:
-        st.markdown(f'<div class="field-label">{bilingual("Category", "শ্রেণি")}</div>', unsafe_allow_html=True)
-        class_choice = st.selectbox("Category", class_options, label_visibility="collapsed")
-
-    topic_filter = topic_choice.split(" · ")[0]
-    class_filter = class_choice.split(" · ")[0]
+        st.markdown(f'<div class="field-label">{t("category_label", lang)}</div>', unsafe_allow_html=True)
+        class_choice = st.selectbox("Category", class_options, label_visibility="collapsed", key="browse_class")
+    with col3:
+        st.markdown(f'<div class="field-label">{t("has_arabic_filter", lang)}</div>', unsafe_allow_html=True)
+        arabic_choice = st.selectbox("Arabic", arabic_options, label_visibility="collapsed", key="browse_ar")
 
     filtered = df.copy()
-    if topic_filter != "All":
-        filtered = filtered[filtered["topic"] == topic_filter]
-    if class_filter != "All":
-        filtered = filtered[filtered["tier1_class"] == class_filter]
+    if topic_choice != t("all_option", lang):
+        # reverse-map display name
+        for tpc in df["topic"].unique():
+            if topic_display(tpc, lang) == topic_choice:
+                filtered = filtered[filtered["topic"] == tpc]
+                break
+    if class_choice != t("all_option", lang):
+        for c in df["tier1_class"].unique():
+            if tier1_display(c, lang) == class_choice:
+                filtered = filtered[filtered["tier1_class"] == c]
+                break
+    if arabic_choice == t("has_arabic_filter", lang):
+        filtered = filtered[
+            filtered["reference_text_ar"].fillna("").astype(str).str.strip() != ""
+        ]
 
     st.markdown(
-        f'<div class="browse-count">{bilingual(f"{len(filtered)} entries", f"{len(filtered)}টি এন্ট্রি")}</div>',
+        f'<div class="browse-count">{len(filtered)} {t("browse_count", lang)}</div>',
         unsafe_allow_html=True,
     )
 
     for _, row in filtered.iterrows():
         st.markdown('<div class="entry">', unsafe_allow_html=True)
         st.markdown(f'<div class="entry-refno">Ref. No. {int(row["id"]):04d}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="entry-question">{row["question_en"] or row["question_bn"]}</div>', unsafe_allow_html=True)
+        display_q = row["question_en"] or row["question_bn"]
+        if lang == "bn" and str(row.get("question_bn", "")).strip():
+            display_q = row["question_bn"]
+        elif lang == "ar" and str(row.get("question_ar", "")).strip():
+            display_q = row["question_ar"]
+            st.markdown(f'<div class="entry-question ar-text" dir="rtl">{display_q}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="entry-question">{display_q}</div>', unsafe_allow_html=True)
         tier1 = str(row["tier1_class"])
-        label = tier1.replace("_", " ")
-        label_bn = TIER1_CLASS_BN.get(tier1, "")
+        label = tier1_display(tier1, lang)
         strictness = str(row.get("strictness_label", "")).strip()
         label_text = f"{label} — {strictness}" if strictness else label
         st.markdown(
-            f'<div class="category-label"><span class="category-mark">{SECTION_MARK}</span>{label_text}'
-            f'<span class="bn-inline"> · {label_bn}</span></div>',
+            f'<div class="category-label"><span class="category-mark">{SECTION_MARK}</span>{label_text}</div>',
             unsafe_allow_html=True,
         )
         explanation = _explanation_for(row)
@@ -1384,65 +1029,221 @@ def render_browse_mode(df: pd.DataFrame) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-# --------------------------------------------------------------------------- #
-# UI — HEADER WITH LOGO
-# --------------------------------------------------------------------------- #
-
-def render_header() -> None:
-    """Render the university identity strip with logo and caption."""
-    
-    # Try to load the logo, fail gracefully if missing
-    logo_html = ""
+def render_header(lang: str) -> None:
     logo_path = "assets/hstu_logo.png"
     if os.path.exists(logo_path):
         try:
-            # Use st.image in a column for proper sizing
-            logo_html = f"""
-            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 0.15rem;">
-                <img src="data:image/png;base64,{_image_to_base64(logo_path)}" 
-                     style="height: 52px; width: auto; object-fit: contain;" />
-                <div>
-                    <div style="font-family: 'Noto Sans Bengali', 'Inter', sans-serif; font-size: 0.78rem; 
-                                color: #544F42; letter-spacing: 0.04em; line-height: 1.3;">
-                        Hajee Mohammad Danesh Science and Technology University
-                    </div>
-                    <div style="font-family: 'Noto Sans Bengali', 'Inter', sans-serif; font-size: 0.72rem; 
-                                color: #544F42; letter-spacing: 0.08em; text-transform: uppercase;">
-                        CSE 469 — Machine Learning and Pattern Recognition
+            import base64
+            with open(logo_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            st.markdown(
+                f"""
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:0.15rem;">
+                    <img src="data:image/png;base64,{b64}" style="height:52px;width:auto;object-fit:contain;" />
+                    <div>
+                        <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.78rem;color:#544F42;letter-spacing:0.04em;line-height:1.3;">
+                            Hajee Mohammad Danesh Science and Technology University
+                        </div>
+                        <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.72rem;color:#544F42;letter-spacing:0.08em;text-transform:uppercase;">
+                            CSE 469 — Machine Learning and Pattern Recognition
+                        </div>
                     </div>
                 </div>
-            </div>
-            """
+                """,
+                unsafe_allow_html=True,
+            )
+            return
         except Exception:
-            # If image loading fails, fall through to text-only
-            logo_html = ""
-    
-    if logo_html:
-        st.markdown(logo_html, unsafe_allow_html=True)
-    else:
-        # Text-only fallback
-        st.markdown(
-            f"""
-            <div style="margin-bottom: 0.15rem;">
-                <div style="font-family: 'Noto Sans Bengali', 'Inter', sans-serif; font-size: 0.78rem; 
-                            color: #544F42; letter-spacing: 0.04em; line-height: 1.3;">
-                    Hajee Mohammad Danesh Science and Technology University
-                </div>
-                <div style="font-family: 'Noto Sans Bengali', 'Inter', sans-serif; font-size: 0.72rem; 
-                            color: #544F42; letter-spacing: 0.08em; text-transform: uppercase;">
-                    CSE 469 — Machine Learning and Pattern Recognition
-                </div>
+            pass
+    st.markdown(
+        """
+        <div style="margin-bottom:0.15rem;">
+            <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.78rem;color:#544F42;letter-spacing:0.04em;line-height:1.3;">
+                Hajee Mohammad Danesh Science and Technology University
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.72rem;color:#544F42;letter-spacing:0.08em;text-transform:uppercase;">
+                CSE 469 — Machine Learning and Pattern Recognition
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-def _image_to_base64(path: str) -> str:
-    """Convert image to base64 for embedding in HTML."""
-    import base64
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+def inject_css(font_size: str = "normal") -> None:
+    size_map = {"small": "0.92", "normal": "1.0", "large": "1.12"}
+    scale = size_map.get(font_size, "1.0")
+    st.markdown(
+        f"""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Inter:wght@400;500;600&family=Noto+Sans+Bengali:wght@400;500;600&family=Noto+Serif+Bengali:wght@400;600&family=Tiro+Bangla&display=swap');
+
+        :root {{
+            --paper: {COLOR_PAPER};
+            --card: {COLOR_CARD};
+            --ink: {COLOR_INK};
+            --ink-muted: {COLOR_INK_MUTED};
+            --accent: {COLOR_ACCENT};
+            --hairline: {COLOR_HAIRLINE};
+            --scale: {scale};
+        }}
+
+        html, body, [class*="css"] {{
+            font-family: 'Inter', 'Noto Sans Bengali', sans-serif;
+            background-color: var(--paper) !important;
+            color: var(--ink);
+            font-size: calc(16px * var(--scale));
+        }}
+
+        .app-title {{
+            font-family: 'Noto Serif Bengali', 'Tiro Bangla', Georgia, serif;
+            font-size: calc(1.85rem * var(--scale));
+            color: var(--ink);
+            margin: 0.2rem 0 0.35rem 0;
+            letter-spacing: -0.01em;
+        }}
+        .app-eyebrow {{
+            font-size: calc(0.78rem * var(--scale));
+            color: var(--ink-muted);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }}
+        .app-subtitle {{
+            font-size: calc(0.95rem * var(--scale));
+            color: var(--ink-muted);
+            line-height: 1.45;
+            margin-bottom: 0.6rem;
+        }}
+        .app-rule {{
+            border: none;
+            border-top: 1px solid var(--hairline);
+            margin: 0.6rem 0 1rem 0;
+        }}
+        .app-footer {{
+            margin-top: 2.5rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--hairline);
+            font-size: calc(0.82rem * var(--scale));
+            color: var(--ink-muted);
+            line-height: 1.5;
+        }}
+
+        .entry {{
+            background: var(--card);
+            border: 1px solid var(--hairline);
+            border-left: 3px solid var(--accent);
+            padding: 1rem 1.15rem;
+            margin: 0.85rem 0;
+            border-radius: 2px;
+        }}
+        .entry-refno {{
+            font-size: calc(0.72rem * var(--scale));
+            color: var(--ink-muted);
+            letter-spacing: 0.04em;
+            margin-bottom: 0.25rem;
+        }}
+        .entry-question {{
+            font-family: 'Noto Serif Bengali', 'Tiro Bangla', Georgia, serif;
+            font-size: calc(1.15rem * var(--scale));
+            color: var(--ink);
+            line-height: 1.4;
+            margin-bottom: 0.2rem;
+        }}
+        .entry-question-en {{
+            font-size: calc(0.92rem * var(--scale));
+            color: var(--ink-muted);
+            margin-bottom: 0.35rem;
+        }}
+        .category-label {{
+            font-size: calc(0.88rem * var(--scale));
+            color: var(--accent);
+            letter-spacing: 0.02em;
+            margin: 0.35rem 0;
+        }}
+        .category-mark {{
+            margin-right: 0.35rem;
+            opacity: 0.85;
+        }}
+        .explanation-text {{
+            font-size: calc(0.95rem * var(--scale));
+            line-height: 1.55;
+            color: var(--ink);
+            margin: 0.5rem 0;
+        }}
+        .citation-block {{
+            background: var(--paper);
+            border: 1px solid var(--hairline);
+            padding: 0.7rem 0.85rem;
+            margin-top: 0.6rem;
+            font-size: calc(0.9rem * var(--scale));
+            line-height: 1.5;
+            color: var(--ink);
+        }}
+        .citation-source {{
+            display: block;
+            margin-top: 0.35rem;
+            font-size: calc(0.8rem * var(--scale));
+            color: var(--ink-muted);
+            font-style: italic;
+        }}
+        .ar-text {{
+            font-family: 'Amiri', 'Noto Naskh Arabic', serif !important;
+            font-size: calc(1.2rem * var(--scale)) !important;
+            line-height: 1.7 !important;
+            direction: rtl;
+            text-align: right;
+            margin-bottom: 0.4rem;
+        }}
+        .verification-flag {{
+            background: {COLOR_FLAG_BG};
+            color: {COLOR_FLAG_INK};
+            font-size: calc(0.8rem * var(--scale));
+            padding: 0.3rem 0.55rem;
+            margin: 0.4rem 0;
+            border-radius: 2px;
+        }}
+        .related-heading, .field-label, .browse-count {{
+            font-size: calc(0.82rem * var(--scale));
+            color: var(--ink-muted);
+            letter-spacing: 0.04em;
+            margin: 0.7rem 0 0.35rem 0;
+        }}
+        .no-match-box {{
+            background: var(--card);
+            border: 1px solid var(--hairline);
+            padding: 1.1rem;
+            margin: 1rem 0;
+        }}
+        .no-match-heading {{
+            font-family: 'Noto Serif Bengali', Georgia, serif;
+            font-size: calc(1.1rem * var(--scale));
+            color: var(--ink);
+            margin-bottom: 0.35rem;
+        }}
+        .no-match-body {{
+            font-size: calc(0.92rem * var(--scale));
+            color: var(--ink-muted);
+        }}
+        .bn-inline {{ color: var(--ink-muted); font-size: 0.92em; }}
+
+        /* Print-friendly */
+        @media print {{
+            header, .stRadio, .stSelectbox, .stButton, .stTextInput,
+            [data-testid="stSidebar"], .app-eyebrow, .app-subtitle,
+            .app-rule, .related-heading, .field-label {{
+                display: none !important;
+            }}
+            .entry {{
+                border: none;
+                border-left: 2px solid #333;
+                page-break-inside: avoid;
+            }}
+            body {{ background: white !important; color: black !important; }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1451,20 +1252,58 @@ def _image_to_base64(path: str) -> str:
 
 def main() -> None:
     st.set_page_config(page_title="Ruling Reference", layout="centered")
-    inject_css()
 
-    # University identity strip (small, quiet — above the title)
-    render_header()
+    # Session state defaults
+    if "lang" not in st.session_state:
+        st.session_state["lang"] = "en"
+    if "font_size" not in st.session_state:
+        st.session_state["font_size"] = "normal"
+    if "bookmarks" not in st.session_state:
+        st.session_state["bookmarks"] = set()
+    if "history" not in st.session_state:
+        st.session_state["history"] = []
 
+    lang = st.session_state["lang"]
+    font_size = st.session_state["font_size"]
+    inject_css(font_size)
+
+    render_header(lang)
+
+    # Language + font-size controls (letterhead area)
+    ctrl1, ctrl2, ctrl3 = st.columns([2, 1.2, 1.2])
+    with ctrl1:
+        lang_choice = st.radio(
+            "Language",
+            options=["en", "bn", "ar"],
+            format_func=lambda x: {"en": "English", "bn": "বাংলা", "ar": "العربية"}[x],
+            horizontal=True,
+            index=["en", "bn", "ar"].index(lang),
+            label_visibility="collapsed",
+            key="lang_radio",
+        )
+        if lang_choice != lang:
+            st.session_state["lang"] = lang_choice
+            st.rerun()
+    with ctrl2:
+        fs = st.radio(
+            t("font_size", lang),
+            options=["small", "normal", "large"],
+            format_func=lambda x: t(f"font_{x}", lang),
+            horizontal=True,
+            index=["small", "normal", "large"].index(font_size),
+            label_visibility="collapsed",
+            key="fs_radio",
+        )
+        if fs != font_size:
+            st.session_state["font_size"] = fs
+            st.rerun()
+
+    st.markdown(f'<div class="app-eyebrow">{t("app_eyebrow", lang)}</div>', unsafe_allow_html=True)
     st.markdown(
-        f'<div class="app-eyebrow">{bilingual("A reference collection of verified rulings", "যাচাইকৃত মাসআলার একটি সংকলন")}</div>',
+        f'<div class="app-title">{t("app_title", lang)}</div>',
         unsafe_allow_html=True,
     )
-    st.markdown('<div class="app-title">Ruling Reference <span class="bn-inline">· মাসআলা অনুসন্ধান</span></div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="app-subtitle">{bilingual_block("Search in Bangla, English, or Banglish — every entry traces to a cited source.", "বাংলা, ইংরেজি অথবা বাংলিশে খুঁজুন — প্রতিটি ফলাফলের সাথে যাচাইযোগ্য তথ্যসূত্র দেওয়া আছে।")}</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="app-subtitle">{t("app_subtitle", lang)}</div>', unsafe_allow_html=True)
     st.markdown('<hr class="app-rule" />', unsafe_allow_html=True)
 
     try:
@@ -1475,45 +1314,69 @@ def main() -> None:
     except DatasetError as exc:
         st.error(str(exc))
         st.stop()
-    except Exception as exc:  # last-resort guard: never show a raw traceback
+    except Exception as exc:
         st.error(f"The app couldn't start up: {exc}")
         st.stop()
 
-    # Mode selector — now with 3 options
+    # Mode selector
+    mode_labels = [t("mode_search", lang), t("mode_browse", lang), t("mode_lab", lang)]
     mode = st.radio(
         "Mode",
-        ["Search · খুঁজুন", "Browse · সবগুলো দেখুন", "Model Insights · মডেল বিশ্লেষণ"],
+        mode_labels,
         horizontal=True,
         label_visibility="collapsed",
+        key="mode_radio",
     )
 
-    if mode.startswith("Search"):
-        st.markdown(
-            f'<div class="field-label">{bilingual("Type your question", "আপনার প্রশ্ন লিখুন")}</div>',
-            unsafe_allow_html=True,
-        )
+    # Saved panel (session-only)
+    bookmarks = st.session_state.get("bookmarks", set())
+    if bookmarks:
+        with st.expander(t("saved_panel", lang)):
+            for bid in sorted(bookmarks):
+                match = df[df["id"] == bid]
+                if not match.empty:
+                    r = match.iloc[0]
+                    q = r["question_en"] or r["question_bn"]
+                    if st.button(f"#{bid:04d} — {q[:60]}", key=f"bm_{bid}"):
+                        _set_pending_query(str(q))
+
+    # History
+    history = st.session_state.get("history", [])
+    if history and mode == t("mode_search", lang):
+        with st.expander(t("history_heading", lang)):
+            for i, h in enumerate(history[:MAX_HISTORY]):
+                if st.button(h, key=f"hist_{i}"):
+                    _set_pending_query(h)
+
+    if mode == t("mode_search", lang):
+        st.markdown(f'<div class="field-label">{t("type_question", lang)}</div>', unsafe_allow_html=True)
         default_query = st.session_state.pop("pending_query", "")
         query = st.text_input(
             "Search",
             value=default_query,
-            placeholder="namaj pora ki · is riba haram · বিয়ে করা কি সুন্নত…",
+            placeholder=t("search_placeholder", lang),
             label_visibility="collapsed",
+            key="main_search",
         )
         if query.strip():
+            # update history
+            hist = st.session_state.get("history", [])
+            if not hist or hist[0] != query.strip():
+                hist = [query.strip()] + [h for h in hist if h != query.strip()]
+                st.session_state["history"] = hist[:MAX_HISTORY]
+
             result = retrieve_candidates(query, df, vectorizer, X, banglish_map)
             if result.row is not None:
-                render_result(result, df, vectorizer, classifier)
+                render_result(result, df, vectorizer, classifier, lang)
             else:
-                render_no_match(result)
-    elif mode.startswith("Model Insights"):
-        render_model_insights_tab(df, vectorizer, X, banglish_map, classifier)
-    else:
-        render_browse_mode(df)
+                render_no_match(result, lang)
 
-    st.markdown(
-        f'<div class="app-footer">{bilingual_block("Entries here are for educational reference only. For personal or complex matters, consult a qualified scholar.", "এখানে দেওয়া তথ্য শুধুমাত্র শিক্ষামূলক রেফারেন্সের জন্য। ব্যক্তিগত বা জটিল বিষয়ে অবশ্যই একজন যোগ্য আলেমের পরামর্শ নিন।")}</div>',
-        unsafe_allow_html=True,
-    )
+    elif mode == t("mode_lab", lang):
+        render_model_insights_tab(df, vectorizer, X, banglish_map, classifier, lang)
+    else:
+        render_browse_mode(df, lang)
+
+    st.markdown(f'<div class="app-footer">{t("footer", lang)}</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
