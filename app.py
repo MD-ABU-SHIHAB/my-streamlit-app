@@ -161,18 +161,17 @@ TOPIC_AR = {
     "Oaths_and_Vows": "الأيمان والنذور",
 }
 
-# Colour palette (existing — no new accents)
-COLOR_PAPER = "#F2ECDD"
-COLOR_CARD = "#FBF8EF"
-COLOR_INK = "#2B2A24"
-COLOR_INK_MUTED = "#544F42"
-COLOR_ACCENT = "#2F4858"
+# Colour palette (quiet reference-library)
+COLOR_PAPER = "#EDE7D9"
+COLOR_CARD = "#F6F2E8"
+COLOR_INK = "#2B2A26"
+COLOR_INK_MUTED = "#6B6558"
+COLOR_ACCENT = "#3A4F63"
 COLOR_ACCENT_SOFT = "#E4DEC9"
-COLOR_HAIRLINE = "#DDD3B8"
+COLOR_HAIRLINE = "#D8D0BC"
 COLOR_FLAG_BG = "#F3E6C8"
 COLOR_FLAG_INK = "#6B4E1F"
 
-# Plotly colourblind-safe qualitative palette
 PLOTLY_SAFE = px.colors.qualitative.Safe
 
 # --------------------------------------------------------------------------- #
@@ -624,18 +623,16 @@ def render_model_insights_tab(
     # ---- Model comparison (Plotly horizontal bar, sorted) ----
     st.markdown("---")
     st.markdown("##### Which model best predicts an unseen ruling’s category?")
-    model_names, f1_vals, acc_vals = [], [], []
+    model_names, f1_vals = [], []
     for name, r in results.items():
         if "error" not in r:
             model_names.append(name)
             f1_vals.append(r["train_macro_f1"])
-            acc_vals.append(r["train_accuracy"])
 
     if model_names:
         order = np.argsort(f1_vals)[::-1]
         model_names = [model_names[i] for i in order]
         f1_vals = [f1_vals[i] for i in order]
-        acc_vals = [acc_vals[i] for i in order]
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
@@ -710,7 +707,7 @@ def render_model_insights_tab(
             mode="markers", name=f"Cluster {c}",
             marker=dict(size=8, color=PLOTLY_SAFE[i % len(PLOTLY_SAFE)]),
             hovertemplate="Cluster %{text}<br>PC1=%{x:.2f}<br>PC2=%{y:.2f}<extra></extra>",
-            text=[str(c)] * mask.sum(),
+            text=[str(c)] * int(mask.sum()),
         ))
     fig_k.update_layout(
         title="K-Means clusters in PCA space",
@@ -745,7 +742,7 @@ def render_model_insights_tab(
             mode="markers", name=c.replace("_", " "),
             marker=dict(size=9, color=PLOTLY_SAFE[i % len(PLOTLY_SAFE)]),
             hovertemplate="%{text}<br>PC1=%{x:.2f}<br>PC2=%{y:.2f}<extra></extra>",
-            text=[c.replace("_", " ")] * mask.sum(),
+            text=[c.replace("_", " ")] * int(mask.sum()),
         ))
     fig_pca.update_layout(
         title=f"PCA projection — {kmeans_data['explained']:.1f}% variance explained by these two axes",
@@ -850,7 +847,6 @@ def render_result(
     st.markdown('<div class="entry">', unsafe_allow_html=True)
     st.markdown(f'<div class="entry-refno">Ref. No. {rid:04d}</div>', unsafe_allow_html=True)
 
-    # Question (prefer language order)
     q_bn = str(row.get("question_bn", "")).strip()
     q_en = str(row.get("question_en", "")).strip()
     q_ar = str(row.get("question_ar", "")).strip()
@@ -882,7 +878,6 @@ def render_result(
     if explanation:
         st.markdown(f'<div class="explanation-text">{explanation}</div>', unsafe_allow_html=True)
 
-    # Citation block (Arabic first when present)
     ref_ar = str(row.get("reference_text_ar", "")).strip()
     ref_text = str(row.get("reference_text", "")).strip()
     ref_source = str(row.get("reference_source", "")).strip()
@@ -899,7 +894,6 @@ def render_result(
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Actions: save + copy
     col_a, col_b = st.columns([1, 1])
     with col_a:
         bookmarks = st.session_state.setdefault("bookmarks", set())
@@ -923,7 +917,6 @@ def render_result(
         if st.session_state.get("last_copied") == citation:
             st.code(citation, language=None)
 
-    # Related
     related = df[(df["topic"] == row["topic"]) & (df["id"] != row["id"])].head(TOP_K_RELATED)
     if not related.empty:
         st.markdown(f'<div class="related-heading">{t("related_heading", lang)}</div>', unsafe_allow_html=True)
@@ -964,7 +957,7 @@ def render_no_match(result: RetrievalResult, lang: str) -> None:
 
 def render_browse_mode(df: pd.DataFrame, lang: str) -> None:
     topic_options = [t("all_option", lang)] + [
-        f"{topic_display(tpc, lang)}" for tpc in sorted(df["topic"].unique().tolist())
+        topic_display(tpc, lang) for tpc in sorted(df["topic"].unique().tolist())
     ]
     class_options = [t("all_option", lang)] + [
         tier1_display(c, lang) for c in sorted(df["tier1_class"].unique().tolist())
@@ -984,7 +977,6 @@ def render_browse_mode(df: pd.DataFrame, lang: str) -> None:
 
     filtered = df.copy()
     if topic_choice != t("all_option", lang):
-        # reverse-map display name
         for tpc in df["topic"].unique():
             if topic_display(tpc, lang) == topic_choice:
                 filtered = filtered[filtered["topic"] == tpc]
@@ -1041,10 +1033,10 @@ def render_header(lang: str) -> None:
                 <div style="display:flex;align-items:center;gap:12px;margin-bottom:0.15rem;">
                     <img src="data:image/png;base64,{b64}" style="height:52px;width:auto;object-fit:contain;" />
                     <div>
-                        <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.78rem;color:#544F42;letter-spacing:0.04em;line-height:1.3;">
+                        <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.78rem;color:#6B6558;letter-spacing:0.04em;line-height:1.3;">
                             Hajee Mohammad Danesh Science and Technology University
                         </div>
-                        <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.72rem;color:#544F42;letter-spacing:0.08em;text-transform:uppercase;">
+                        <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.72rem;color:#6B6558;letter-spacing:0.08em;text-transform:uppercase;">
                             CSE 469 — Machine Learning and Pattern Recognition
                         </div>
                     </div>
@@ -1058,10 +1050,10 @@ def render_header(lang: str) -> None:
     st.markdown(
         """
         <div style="margin-bottom:0.15rem;">
-            <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.78rem;color:#544F42;letter-spacing:0.04em;line-height:1.3;">
+            <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.78rem;color:#6B6558;letter-spacing:0.04em;line-height:1.3;">
                 Hajee Mohammad Danesh Science and Technology University
             </div>
-            <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.72rem;color:#544F42;letter-spacing:0.08em;text-transform:uppercase;">
+            <div style="font-family:'Noto Sans Bengali','Inter',sans-serif;font-size:0.72rem;color:#6B6558;letter-spacing:0.08em;text-transform:uppercase;">
                 CSE 469 — Machine Learning and Pattern Recognition
             </div>
         </div>
@@ -1226,7 +1218,6 @@ def inject_css(font_size: str = "normal") -> None:
         }}
         .bn-inline {{ color: var(--ink-muted); font-size: 0.92em; }}
 
-        /* Print-friendly */
         @media print {{
             header, .stRadio, .stSelectbox, .stButton, .stTextInput,
             [data-testid="stSidebar"], .app-eyebrow, .app-subtitle,
@@ -1253,7 +1244,6 @@ def inject_css(font_size: str = "normal") -> None:
 def main() -> None:
     st.set_page_config(page_title="Ruling Reference", layout="centered")
 
-    # Session state defaults
     if "lang" not in st.session_state:
         st.session_state["lang"] = "en"
     if "font_size" not in st.session_state:
@@ -1269,8 +1259,7 @@ def main() -> None:
 
     render_header(lang)
 
-    # Language + font-size controls (letterhead area)
-    ctrl1, ctrl2, ctrl3 = st.columns([2, 1.2, 1.2])
+    ctrl1, ctrl2 = st.columns([2.5, 1.5])
     with ctrl1:
         lang_choice = st.radio(
             "Language",
@@ -1299,10 +1288,7 @@ def main() -> None:
             st.rerun()
 
     st.markdown(f'<div class="app-eyebrow">{t("app_eyebrow", lang)}</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="app-title">{t("app_title", lang)}</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="app-title">{t("app_title", lang)}</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="app-subtitle">{t("app_subtitle", lang)}</div>', unsafe_allow_html=True)
     st.markdown('<hr class="app-rule" />', unsafe_allow_html=True)
 
@@ -1318,7 +1304,6 @@ def main() -> None:
         st.error(f"The app couldn't start up: {exc}")
         st.stop()
 
-    # Mode selector
     mode_labels = [t("mode_search", lang), t("mode_browse", lang), t("mode_lab", lang)]
     mode = st.radio(
         "Mode",
@@ -1328,7 +1313,6 @@ def main() -> None:
         key="mode_radio",
     )
 
-    # Saved panel (session-only)
     bookmarks = st.session_state.get("bookmarks", set())
     if bookmarks:
         with st.expander(t("saved_panel", lang)):
@@ -1340,7 +1324,6 @@ def main() -> None:
                     if st.button(f"#{bid:04d} — {q[:60]}", key=f"bm_{bid}"):
                         _set_pending_query(str(q))
 
-    # History
     history = st.session_state.get("history", [])
     if history and mode == t("mode_search", lang):
         with st.expander(t("history_heading", lang)):
@@ -1359,7 +1342,6 @@ def main() -> None:
             key="main_search",
         )
         if query.strip():
-            # update history
             hist = st.session_state.get("history", [])
             if not hist or hist[0] != query.strip():
                 hist = [query.strip()] + [h for h in hist if h != query.strip()]
