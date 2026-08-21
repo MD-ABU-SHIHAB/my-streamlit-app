@@ -1,13 +1,188 @@
 """HIKMA — Islamic Knowledge AI
-Streamlit UI: manuscript / mosque-tile visual identity, Bangla-first, source-grounded.
+
+A single-file Streamlit app: the matching engine (the HIKMA class) and the
+UI live together here so the whole project only needs this file, a
+requirements.txt, and dataset.csv.
 """
-import random
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from difflib import get_close_matches
+from functools import lru_cache
+import re
 
 import pandas as pd
 import streamlit as st
 
-from main import HIKMA
+REQUIRED_COLUMNS = [
+    "id", "topic", "keywords", "category", "answer_bangla",
+    "answer_english", "arabic_text", "arabic_bangla", "sources", "confidence",
+]
 
+
+# ===========================================================================
+# Matching engine
+# ===========================================================================
+class HIKMA:
+    def __init__(self, dataset_path: str):
+        """Load the dataset and build the lookup structures used at query time."""
+        self.df = pd.read_csv(dataset_path)
+        self._validate_columns()
+        self._clean_data()
+
+        # Plain Python lists — touching these is far cheaper per-row than
+        # DataFrame/iterrows access, since there's no Series construction.
+        self._topics_lower = self.df["topic"].astype(str).str.lower().tolist()
+        self._answers_lower = self.df["answer_bangla"].astype(str).str.lower().tolist()
+
+        self.all_keywords: set[str] = set()
+        self.keyword_index: dict[str, list[int]] = defaultdict(list)
+        self._build_keyword_index()
+
+    # ---- setup ----
+    def _validate_columns(self) -> None:
+        missing = [c for c in REQUIRED_COLUMNS if c not in self.df.columns]
+        if missing:
+            raise ValueError(
+                f"dataset.csv is missing required column(s): {', '.join(missing)}"
+            )
+
+    def _clean_data(self) -> None:
+        """Fill missing text fields so downstream code never has to check for NaN."""
+        text_cols = ["arabic_text", "arabic_bangla", "answer_english", "sources", "category"]
+        for col in text_cols:
+            self.df[col] = self.df[col].fillna("")
+        self.df["confidence"] = self.df["confidence"].fillna("medium")
+
+    def _build_keyword_index(self) -> None:
+        """Map every keyword variant -> the row indices it appears in.
+
+        This is the one place we still touch every row, but it happens once
+        at startup rather than once per question — important at 60k+ rows.
+        """
+        for idx, keywords_str in enumerate(self.df["keywords"]):
+            if pd.isna(keywords_str):
+                continue
+            for kw in str(keywords_str).split(","):
+                kw = kw.strip().lower()
+                if not kw:
+                    continue
+                self.all_keywords.add(kw)
+                self.keyword_index[kw].append(idx)
+
+    # ---- query processing ----
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        text = text.lower().strip()
+        return re.sub(r"\s+", " ", text)
+
+    def _extract_keywords(self, query: str) -> list[str]:
+        """Find which known keywords appear in (or closely resemble) the query."""
+        found = [kw for kw in self.all_keywords if kw in query]
+
+        if not found:
+            for word in query.split():
+                if len(word) > 2:
+                    found.extend(get_close_matches(word, self.all_keywords, n=3, cutoff=0.6))
+
+        return found
+
+    def _score_by_keywords(self, query: str, keywords: list[str]) -> Counter:
+        """Tally candidate rows using only the (small) set of rows each keyword maps to."""
+        scores: Counter = Counter()
+        for kw in keywords:
+            for idx in self.keyword_index.get(kw, ()):
+                scores[idx] += 1
+
+        for idx, topic in enumerate(self._topics_lower):
+            if topic and topic in query:
+                scores[idx] += 3
+
+        return scores
+
+    def _score_by_free_text(self, query: str) -> Counter:
+        """Fallback when no keyword matched at all: raw word overlap with the
+        topic name (weighted higher) and the Bangla answer text."""
+        scores: Counter = Counter()
+        query_words = [w for w in query.split() if len(w) > 2]
+        if not query_words:
+            return scores
+
+        for idx, (topic, answer) in enumerate(zip(self._topics_lower, self._answers_lower)):
+            score = 0
+            for word in query_words:
+                if word in topic:
+                    score += 3
+                if word in answer:
+                    score += 1
+            if score:
+                scores[idx] = score
+
+        return scores
+
+    def _find_best_match(self, query: str) -> tuple[pd.Series | None, int]:
+        query = self._normalize_text(query)
+        keywords = self._extract_keywords(query)
+
+        scores = self._score_by_keywords(query, keywords) if keywords else Counter()
+        if not scores:
+            scores = self._score_by_free_text(query)
+
+        if not scores:
+            return None, 0
+
+        best_idx, best_score = scores.most_common(1)[0]
+        return self.df.iloc[best_idx], best_score
+
+    # ---- public API ----
+    @lru_cache(maxsize=512)
+    def _ask_cached(self, normalized_query: str) -> dict:
+        match, score = self._find_best_match(normalized_query)
+
+        if match is None:
+            return {
+                "bangla": "আমি এই প্রশ্নের উত্তর জানি না। অন্য প্রশ্ন জিজ্ঞাসা করুন।",
+                "english": "I don't know the answer to this question. Please ask another question.",
+                "arabic": "",
+                "arabic_bangla": "",
+                "source": "",
+                "category": "",
+                "topic": "",
+                "confidence": 0.1,
+            }
+
+        confidence_label = str(match["confidence"]).strip().lower()
+        base_confidence = {"high": 0.9, "medium": 0.7}.get(confidence_label, 0.5)
+        if score <= 1:
+            base_confidence = min(base_confidence, 0.5)
+
+        return {
+            "bangla": match["answer_bangla"],
+            "english": match["answer_english"],
+            "arabic": match["arabic_text"],
+            "arabic_bangla": match["arabic_bangla"],
+            "source": match["sources"],
+            "category": match["category"],
+            "topic": match["topic"],
+            "confidence": base_confidence,
+        }
+
+    def ask(self, query: str) -> dict:
+        """Process a query and return a response dict with keys: bangla,
+        english, arabic, arabic_bangla, source, category, topic, confidence."""
+        if not query or not query.strip():
+            return {
+                "bangla": "দয়া করে একটি প্রশ্ন লিখুন।",
+                "english": "Please write a question.",
+                "confidence": 0.0,
+            }
+
+        return self._ask_cached(self._normalize_text(query))
+
+
+# ===========================================================================
+# Streamlit UI
+# ===========================================================================
 st.set_page_config(
     page_title="HIKMA — Islamic Knowledge AI",
     page_icon="🕌",
@@ -15,12 +190,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------------------
-# Design tokens
-#   Parchment + deep teal + manuscript gold, instead of the generic
-#   cream/terracotta or near-black/neon palettes — grounded in illuminated
-#   Qur'an manuscripts and İznik mosque tilework rather than picked at random.
-# ---------------------------------------------------------------------------
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Tiro+Bangla&family=Inter:wght@400;500;600;700&display=swap');
@@ -41,7 +210,6 @@ CSS = """
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .stApp { background: var(--parchment); }
 
-/* ---------- Header ---------- */
 .hikma-header {
     position: relative;
     background:
@@ -79,14 +247,12 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     border-radius: 2px;
 }
 
-/* ---------- Suggestion chips (empty state) ---------- */
 .chip-label {
     font-family: 'Tiro Bangla', serif;
     color: var(--teal-deep);
     font-size: 1.05rem;
     margin-bottom: 0.6rem;
 }
-div[data-testid="stButton"] > button.chip-btn,
 .stButton > button {
     border-radius: 999px !important;
     border: 1.5px solid var(--teal-light) !important;
@@ -108,7 +274,6 @@ div[data-testid="stButton"] > button.chip-btn,
     outline-offset: 2px;
 }
 
-/* ---------- Chat bubbles ---------- */
 @keyframes fadeInUp {
     from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: translateY(0); }
@@ -145,6 +310,7 @@ div[data-testid="stButton"] > button.chip-btn,
     padding: 0.15rem 0.6rem;
     border-radius: 999px;
     margin-bottom: 0.5rem;
+    margin-right: 0.4rem;
 }
 .assistant-card .answer-bn {
     font-family: 'Tiro Bangla', serif;
@@ -153,7 +319,6 @@ div[data-testid="stButton"] > button.chip-btn,
     color: var(--ink);
 }
 
-/* ---------- Confidence pill ---------- */
 .conf-pill {
     display: inline-flex;
     align-items: center;
@@ -168,7 +333,6 @@ div[data-testid="stButton"] > button.chip-btn,
 .conf-med   { background: rgba(200,155,60,0.18); color: #8A6A22; }
 .conf-low   { background: rgba(166,75,60,0.14); color: var(--brick); }
 
-/* ---------- Ayah frame ---------- */
 .ayah-frame {
     direction: rtl;
     text-align: center;
@@ -192,7 +356,6 @@ div[data-testid="stButton"] > button.chip-btn,
     color: var(--ink);
 }
 
-/* ---------- Sidebar ---------- */
 section[data-testid="stSidebar"] {
     background: var(--teal-deep);
     color: var(--parchment);
@@ -200,7 +363,6 @@ section[data-testid="stSidebar"] {
 section[data-testid="stSidebar"] * { color: var(--parchment) !important; }
 section[data-testid="stSidebar"] hr { border-color: rgba(247,241,225,0.2); }
 
-/* ---------- Footer ---------- */
 .hikma-footer {
     text-align: center;
     color: var(--muted);
@@ -214,9 +376,7 @@ section[data-testid="stSidebar"] hr { border-color: rgba(247,241,225,0.2); }
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
-# ---------------------------------------------------------------------------
-# Session state & data
-# ---------------------------------------------------------------------------
+# ---- session state & data ----
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "hikma" not in st.session_state:
@@ -225,7 +385,7 @@ if "feedback" not in st.session_state:
     st.session_state.feedback = {}
 
 try:
-    df = pd.read_csv("dataset.csv")
+    df = st.session_state.hikma.df
     dataset_loaded = True
 except Exception:
     df = None
@@ -244,7 +404,7 @@ def handle_query(query_text: str) -> None:
         "content": response["bangla"],
         "confidence": response["confidence"],
     }
-    for key in ("english", "arabic", "arabic_bangla", "source"):
+    for key in ("english", "arabic", "arabic_bangla", "source", "category", "topic"):
         val = response.get(key)
         if val and str(val).strip():
             msg_data[key] = val
@@ -252,9 +412,7 @@ def handle_query(query_text: str) -> None:
     st.session_state.messages.append(msg_data)
 
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
+# ---- sidebar ----
 with st.sidebar:
     st.markdown("## 🕌 HIKMA")
     st.markdown("Islamic Knowledge AI")
@@ -298,9 +456,7 @@ with st.sidebar:
         "✅ সূত্র-ভিত্তিক উত্তর"
     )
 
-# ---------------------------------------------------------------------------
-# Header
-# ---------------------------------------------------------------------------
+# ---- header ----
 st.markdown(
     """
     <div class="hikma-header">
@@ -312,9 +468,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------------------------------------------------------------------------
-# Empty state — clickable topic chips
-# ---------------------------------------------------------------------------
+# ---- empty state: clickable topic chips ----
 if not st.session_state.messages:
     st.markdown('<p class="chip-label">দ্রুত শুরু করতে একটি বিষয়ে ক্লিক করুন —</p>', unsafe_allow_html=True)
     cols = st.columns(4)
@@ -324,9 +478,7 @@ if not st.session_state.messages:
             st.rerun()
     st.write("")
 
-# ---------------------------------------------------------------------------
-# Chat history
-# ---------------------------------------------------------------------------
+# ---- chat history ----
 CONF_LABELS = [
     (0.8, "conf-high", "উচ্চ আস্থা"),
     (0.5, "conf-med", "মাঝারি আস্থা"),
@@ -352,6 +504,12 @@ for i, msg in enumerate(st.session_state.messages):
             conf_class, conf_label = css_class, label
             break
 
+    badges = '<span class="badge">HIKMA</span>'
+    if msg.get("topic"):
+        badges += f'<span class="badge">{msg["topic"]}</span>'
+    if msg.get("category"):
+        badges += f'<span class="badge">{msg["category"]}</span>'
+
     col_icon, col_card = st.columns([1, 11])
     with col_icon:
         st.markdown("### 🕌")
@@ -359,7 +517,7 @@ for i, msg in enumerate(st.session_state.messages):
         st.markdown(
             f"""
             <div class="msg-row assistant-card">
-                <span class="badge">HIKMA</span>
+                {badges}
                 <div class="answer-bn">{msg['content']}</div>
                 <div class="conf-pill {conf_class}">📊 {conf_label} · {int(conf * 100)}%</div>
             </div>
@@ -396,9 +554,7 @@ for i, msg in enumerate(st.session_state.messages):
                 st.session_state.feedback[fb_key] = "উন্নতি প্রয়োজন"
                 st.rerun()
 
-# ---------------------------------------------------------------------------
-# Input — Enter-to-send, auto-clears
-# ---------------------------------------------------------------------------
+# ---- input: Enter-to-send, auto-clears ----
 st.divider()
 with st.form("ask_form", clear_on_submit=True):
     col_input, col_submit = st.columns([6, 1])
@@ -416,9 +572,7 @@ if submitted and user_input.strip():
         handle_query(user_input.strip())
     st.rerun()
 
-# ---------------------------------------------------------------------------
-# Footer
-# ---------------------------------------------------------------------------
+# ---- footer ----
 st.markdown(
     """
     <div class="hikma-footer">
