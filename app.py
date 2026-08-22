@@ -603,7 +603,7 @@ st.markdown(
     """
     <div class="hikma-footer">
         <strong>HIKMA</strong> — Islamic Knowledge AI<br>
-        <small>বাংলিশে জিজ্ঞাসা করুন • বাংলায় উত্তর পান • সূত্র আরবিতে</small>
+        <small>স্পষ্ট প্রশ্ন • নির্ভরযোগ্য উত্তর • যাচাইকৃত সূত্র</small>
     </div>
     """,
     unsafe_allow_html=True,
