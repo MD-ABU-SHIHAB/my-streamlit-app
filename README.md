@@ -25,7 +25,7 @@ confidence score.
 
 ## 🧱 Tech Stack
 
-- [Streamlit]([https://streamlit.io/](https://md-abu-shihab-my-streamlit-app-app-kvtan9.streamlit.app/)) — UI
+- [Streamlit]([https://md-abu-shihab-my-streamlit-app-app-kvtan9.streamlit.app/]) — UI
 - [pandas](https://pandas.pydata.org/) — dataset loading and lookups
 - Python standard library (`difflib`, `functools.lru_cache`) — fuzzy matching and query caching
 
