@@ -3,6 +3,10 @@
 A single-file Streamlit app: the matching engine (the HIKMA class) and the
 UI live together here so the whole project only needs this file, a
 requirements.txt, and dataset.csv.
+
+Visual language deliberately mirrors Claude.ai's own product UI: warm
+cream background, a single terracotta accent, serif headings over a plain
+sans body, no gradients or heavy cards — flat, quiet, generous whitespace.
 """
 from __future__ import annotations
 
@@ -54,8 +58,6 @@ class HIKMA:
         self._validate_columns()
         self._clean_data()
 
-        # Plain Python lists — touching these is far cheaper per-row than
-        # DataFrame/iterrows access, since there's no Series construction.
         self._topics_lower = self.df["topic"].astype(str).str.lower().tolist()
         self._answers_lower = self.df["answer_bangla"].astype(str).str.lower().tolist()
 
@@ -63,7 +65,6 @@ class HIKMA:
         self.keyword_index: dict[str, list[int]] = defaultdict(list)
         self._build_keyword_index()
 
-    # ---- setup ----
     def _validate_columns(self) -> None:
         missing = [c for c in REQUIRED_COLUMNS if c not in self.df.columns]
         if missing:
@@ -72,18 +73,12 @@ class HIKMA:
             )
 
     def _clean_data(self) -> None:
-        """Fill missing text fields so downstream code never has to check for NaN."""
         text_cols = ["arabic_text", "arabic_bangla", "answer_english", "sources", "category"]
         for col in text_cols:
             self.df[col] = self.df[col].fillna("")
         self.df["confidence"] = self.df["confidence"].fillna("medium")
 
     def _build_keyword_index(self) -> None:
-        """Map every keyword variant -> the row indices it appears in.
-
-        This is the one place we still touch every row, but it happens once
-        at startup rather than once per question — important at 60k+ rows.
-        """
         for idx, keywords_str in enumerate(self.df["keywords"]):
             if pd.isna(keywords_str):
                 continue
@@ -94,44 +89,34 @@ class HIKMA:
                 self.all_keywords.add(kw)
                 self.keyword_index[kw].append(idx)
 
-    # ---- query processing ----
     @staticmethod
     def _normalize_text(text: str) -> str:
         text = text.lower().strip()
         return re.sub(r"\s+", " ", text)
 
     def _extract_keywords(self, query: str) -> list[str]:
-        """Find which known keywords appear in (or closely resemble) the query."""
         found = [kw for kw in self.all_keywords if kw in query]
-
         if not found:
             for word in query.split():
                 if len(word) > 2:
                     found.extend(get_close_matches(word, self.all_keywords, n=3, cutoff=0.6))
-
         return found
 
     def _score_by_keywords(self, query: str, keywords: list[str]) -> Counter:
-        """Tally candidate rows using only the (small) set of rows each keyword maps to."""
         scores: Counter = Counter()
         for kw in keywords:
             for idx in self.keyword_index.get(kw, ()):
                 scores[idx] += 1
-
         for idx, topic in enumerate(self._topics_lower):
             if topic and topic in query:
                 scores[idx] += 3
-
         return scores
 
     def _score_by_free_text(self, query: str) -> Counter:
-        """Fallback when no keyword matched at all: raw word overlap with the
-        topic name (weighted higher) and the Bangla answer text."""
         scores: Counter = Counter()
         query_words = [w for w in query.split() if len(w) > 2]
         if not query_words:
             return scores
-
         for idx, (topic, answer) in enumerate(zip(self._topics_lower, self._answers_lower)):
             score = 0
             for word in query_words:
@@ -141,34 +126,26 @@ class HIKMA:
                     score += 1
             if score:
                 scores[idx] = score
-
         return scores
 
     def _find_best_match(self, query: str) -> tuple[pd.Series | None, int]:
         query = self._normalize_text(query)
         keywords = self._extract_keywords(query)
-
         scores = self._score_by_keywords(query, keywords) if keywords else Counter()
         if not scores:
             scores = self._score_by_free_text(query)
-
         if not scores:
             return None, 0
-
         best_idx, best_score = scores.most_common(1)[0]
         return self.df.iloc[best_idx], best_score
 
     def suggest_keywords(self, query: str, n: int = 5) -> list[str]:
-        """Public helper for 'did you mean' suggestions: closest known keywords
-        to whatever the user typed, for use when nothing matched at all."""
         query = self._normalize_text(query)
         words = [w for w in query.split() if len(w) > 2] or [query]
         suggestions: list[str] = []
         for word in words:
             suggestions.extend(get_close_matches(word, self.all_keywords, n=n, cutoff=0.5))
-        # de-duplicate while preserving order
-        seen = set()
-        unique = []
+        seen, unique = set(), []
         for s in suggestions:
             if s not in seen:
                 seen.add(s)
@@ -176,7 +153,6 @@ class HIKMA:
         return unique[:n]
 
     def related_topics(self, category: str, exclude_topic: str, n: int = 3) -> list[str]:
-        """Other topics sharing the same category, for 'you might also ask' chips."""
         if not category:
             return []
         pool = self.df[(self.df["category"] == category) & (self.df["topic"] != exclude_topic)]
@@ -185,7 +161,6 @@ class HIKMA:
         sample = pool["topic"].drop_duplicates()
         return sample.sample(min(n, len(sample))).tolist()
 
-    # ---- public API ----
     @lru_cache(maxsize=512)
     def _ask_cached(self, normalized_query: str) -> dict:
         match, score = self._find_best_match(normalized_query)
@@ -219,20 +194,17 @@ class HIKMA:
         }
 
     def ask(self, query: str) -> dict:
-        """Process a query and return a response dict with keys: bangla,
-        english, arabic, arabic_bangla, source, category, topic, confidence."""
         if not query or not query.strip():
             return {
                 "bangla": "দয়া করে একটি প্রশ্ন লিখুন।",
                 "english": "Please write a question.",
                 "confidence": 0.0,
             }
-
         return self._ask_cached(self._normalize_text(query))
 
 
 # ===========================================================================
-# Streamlit UI
+# Streamlit UI — Claude.ai visual language
 # ===========================================================================
 st.set_page_config(
     page_title="HIKMA — Islamic Knowledge AI",
@@ -243,234 +215,198 @@ st.set_page_config(
 
 BASE_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Tiro+Bangla&family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Tiro+Bangla&family=Inter:wght@400;500;600&display=swap');
 
 :root {
-    --parchment: #F7F1E1;
-    --parchment-dim: #EFE6CC;
-    --ink: #1E2A28;
-    --teal-deep: #0B3D3B;
-    --teal: #145C56;
-    --teal-light: #2F7A72;
-    --gold: #C89B3C;
-    --gold-light: #E4C776;
-    --brick: #A64B3C;
-    --muted: #6B7573;
+    --bg: #FAF9F5;
+    --bg-alt: #F0EEE6;
+    --bg-card: #FFFFFF;
+    --text: #1F1E1C;
+    --text-muted: #83827D;
+    --accent: #D97757;
+    --accent-hover: #C15F3C;
+    --border: #E5E2D9;
 }
 
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.stApp { background: var(--parchment); transition: background 0.3s ease; }
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; color: var(--text); }
+.stApp { background: var(--bg); }
+section[data-testid="stSidebar"] > div { background: var(--bg-alt); }
+section[data-testid="stSidebar"] { border-right: 1px solid var(--border); }
 
+/* ---------- Header ---------- */
 .hikma-header {
-    position: relative;
-    background:
-        linear-gradient(45deg, rgba(200,155,60,0.10) 25%, transparent 25%, transparent 75%, rgba(200,155,60,0.10) 75%),
-        linear-gradient(45deg, rgba(200,155,60,0.10) 25%, transparent 25%, transparent 75%, rgba(200,155,60,0.10) 75%),
-        linear-gradient(135deg, var(--teal-deep) 0%, var(--teal) 100%);
-    background-size: 26px 26px, 26px 26px, 100% 100%;
-    background-position: 0 0, 13px 13px, 0 0;
-    padding: 2.4rem 2rem 2rem;
-    border-radius: 18px;
-    text-align: center;
-    margin-bottom: 0.6rem;
-    box-shadow: 0 8px 24px rgba(11,61,59,0.25);
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    padding: 1.4rem 0 1rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.2rem;
 }
-.hikma-header h1 {
-    font-family: 'Amiri', serif;
-    font-weight: 700;
-    font-size: 3rem;
-    color: var(--gold-light);
-    margin: 0;
-    letter-spacing: 0.04em;
+.hikma-header .mark {
+    font-family: 'Source Serif 4', serif;
+    font-weight: 600;
+    font-size: 1.9rem;
+    color: var(--text);
 }
-.hikma-header p {
+.hikma-header .tagline {
     font-family: 'Tiro Bangla', serif;
-    font-size: 1.15rem;
-    color: #F2EAD3;
-    opacity: 0.95;
-    margin-top: 0.4rem;
-}
-.hikma-rule {
-    height: 3px;
-    margin: 0 auto 1.6rem;
-    max-width: 420px;
-    background: linear-gradient(90deg, transparent, var(--gold) 20%, var(--gold-light) 50%, var(--gold) 80%, transparent);
-    border-radius: 2px;
+    font-size: 0.98rem;
+    color: var(--text-muted);
 }
 
-.chip-label {
-    font-family: 'Tiro Bangla', serif;
-    color: var(--teal-deep);
-    font-size: 1.05rem;
-    margin-bottom: 0.6rem;
-}
+/* ---------- Buttons ---------- */
 .stButton > button {
-    border-radius: 999px !important;
-    border: 1.5px solid var(--teal-light) !important;
-    background: var(--parchment) !important;
-    color: var(--teal-deep) !important;
+    border-radius: 8px !important;
+    border: 1px solid var(--border) !important;
+    background: var(--bg-card) !important;
+    color: var(--text) !important;
     font-family: 'Inter', sans-serif !important;
     font-weight: 500 !important;
-    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    font-size: 0.88rem !important;
+    box-shadow: none !important;
+    transition: background 0.12s ease, border-color 0.12s ease;
 }
 .stButton > button:hover {
-    background: var(--teal-deep) !important;
-    color: var(--gold-light) !important;
-    border-color: var(--teal-deep) !important;
-    transform: translateY(-2px);
-    box-shadow: 0 6px 14px rgba(11,61,59,0.22);
+    background: var(--bg-alt) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
 }
-.stButton > button:focus-visible {
-    outline: 3px solid var(--gold) !important;
-    outline-offset: 2px;
-}
+.stButton > button:focus-visible { outline: 2px solid var(--accent) !important; outline-offset: 1px; }
 
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(6px); }
-    to   { opacity: 1; transform: translateY(0); }
+div[data-testid="stFormSubmitButton"] > button {
+    background: var(--accent) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    font-weight: 600 !important;
 }
-.msg-row { animation: fadeInUp 0.35s ease; margin: 0.7rem 0; }
+div[data-testid="stFormSubmitButton"] > button:hover { background: var(--accent-hover) !important; color: #fff !important; }
 
-.msg-meta {
-    font-size: 0.72rem;
-    color: var(--muted);
-    margin-top: 0.3rem;
-}
+/* ---------- Chat turns ---------- */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.turn { animation: fadeIn 0.25s ease; padding: 1.1rem 0; border-bottom: 1px solid var(--border); }
+.turn:last-child { border-bottom: none; }
 
-.user-msg {
-    background: var(--teal-deep);
-    color: #F7F1E1;
-    padding: 0.9rem 1.2rem;
-    border-radius: 20px 20px 4px 20px;
-    max-width: 78%;
-    margin-left: auto;
-    box-shadow: 0 3px 10px rgba(11,61,59,0.18);
-}
-.user-msg strong { color: var(--gold-light); }
-
-.assistant-card {
-    background: #FFFDF6;
-    border: 1px solid var(--parchment-dim);
-    border-top: 4px solid var(--gold);
-    border-radius: 6px 22px 22px 22px;
-    padding: 1.1rem 1.3rem;
-    max-width: 88%;
-    box-shadow: 0 4px 14px rgba(30,42,40,0.08);
-}
-.assistant-card .badge {
-    display: inline-block;
+.role-label {
     font-family: 'Inter', sans-serif;
+    font-size: 0.72rem;
     font-weight: 600;
-    font-size: 0.78rem;
-    color: var(--teal-deep);
-    background: var(--parchment-dim);
-    padding: 0.15rem 0.6rem;
-    border-radius: 999px;
-    margin-bottom: 0.5rem;
-    margin-right: 0.4rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.35rem;
 }
-.assistant-card .answer-bn {
+.role-label.user { text-align: right; }
+
+.user-bubble {
+    background: var(--bg-alt);
+    color: var(--text);
+    padding: 0.75rem 1rem;
+    border-radius: 14px;
+    max-width: 70%;
+    margin-left: auto;
     font-family: 'Tiro Bangla', serif;
-    font-size: 1.15rem;
-    line-height: 1.75;
-    color: var(--ink);
+    font-size: 1.02rem;
+}
+
+.answer-bn {
+    font-family: 'Tiro Bangla', serif;
+    font-size: 1.08rem;
+    line-height: 1.85;
+    color: var(--text);
     min-height: 1.6rem;
 }
-.cursor-blink::after {
-    content: "▌";
-    animation: blink 0.9s steps(1) infinite;
-    color: var(--gold);
-}
+.cursor-blink::after { content: "▌"; animation: blink 0.9s steps(1) infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0; } }
 
-.conf-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.82rem;
-    font-weight: 600;
-    padding: 0.25rem 0.75rem;
-    border-radius: 999px;
-    margin-top: 0.7rem;
+.tag-row { margin-bottom: 0.5rem; }
+.tag {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    padding: 0.1rem 0.55rem;
+    border-radius: 6px;
+    margin-right: 0.35rem;
 }
-.conf-high  { background: rgba(11,61,59,0.10); color: var(--teal-deep); }
-.conf-med   { background: rgba(200,155,60,0.18); color: #8A6A22; }
-.conf-low   { background: rgba(166,75,60,0.14); color: var(--brick); }
+
+.conf-tag {
+    display: inline-block;
+    font-size: 0.76rem;
+    font-weight: 500;
+    padding: 0.15rem 0.6rem;
+    border-radius: 6px;
+    margin-top: 0.6rem;
+    border: 1px solid var(--border);
+}
+.conf-high { color: var(--accent); border-color: var(--accent); }
+.conf-med  { color: var(--text-muted); }
+.conf-low  { color: var(--text-muted); border-style: dashed; }
+
+.msg-meta { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; }
 
 .ayah-frame {
     direction: rtl;
     text-align: center;
-    font-family: 'Amiri', serif;
-    font-size: 1.5rem;
-    color: var(--teal-deep);
-    background: linear-gradient(180deg, #FBF6E8, #F3E9CC);
-    border: 1px solid var(--gold);
-    border-radius: 10px;
-    padding: 1rem 1.4rem;
-    line-height: 2.1;
+    font-family: 'Source Serif 4', serif;
+    font-size: 1.35rem;
+    color: var(--text);
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 0.9rem 1.2rem;
+    line-height: 2;
 }
-.ayah-frame .bracket { color: var(--gold); font-size: 1.7rem; }
+.ayah-frame .bracket { color: var(--accent); }
 .translation-box {
     font-family: 'Tiro Bangla', serif;
-    background: var(--parchment-dim);
-    border-left: 3px solid var(--teal-light);
-    padding: 0.75rem 1rem;
+    background: var(--bg-alt);
+    border-left: 3px solid var(--accent);
+    padding: 0.7rem 1rem;
     border-radius: 0 8px 8px 0;
     margin-top: 0.4rem;
-    color: var(--ink);
+    color: var(--text);
 }
 
-.copy-btn, .related-btn {
+.icon-btn, .related-btn {
     display: inline-block;
     font-family: 'Inter', sans-serif;
-    font-size: 0.78rem;
-    font-weight: 500;
-    color: var(--teal-deep);
-    background: var(--parchment-dim);
-    border: 1px solid var(--teal-light);
-    border-radius: 999px;
-    padding: 0.2rem 0.7rem;
-    margin: 0.5rem 0.3rem 0 0;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.15rem 0.6rem;
+    margin: 0.5rem 0.35rem 0 0;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
 }
-.copy-btn:hover, .related-btn:hover { background: var(--teal-deep); color: var(--gold-light); }
-
-section[data-testid="stSidebar"] {
-    background: var(--teal-deep);
-    color: var(--parchment);
-}
-section[data-testid="stSidebar"] * { color: var(--parchment) !important; }
-section[data-testid="stSidebar"] hr { border-color: rgba(247,241,225,0.2); }
+.icon-btn:hover, .related-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .hikma-footer {
     text-align: center;
-    color: var(--muted);
+    color: var(--text-muted);
     padding: 1.6rem;
     font-family: 'Tiro Bangla', serif;
-    font-size: 0.9rem;
-    border-top: 1px solid var(--parchment-dim);
-    margin-top: 1.5rem;
+    font-size: 0.88rem;
+    margin-top: 1rem;
 }
 </style>
 """
 
 DARK_CSS = """
 <style>
-.stApp { background: #0E1F1D !important; }
-.assistant-card {
-    background: #14302B !important;
-    border-color: #23453F !important;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.35) !important;
+:root {
+    --bg: #262624 !important;
+    --bg-alt: #30302E !important;
+    --bg-card: #2B2B29 !important;
+    --text: #F5F4EF !important;
+    --text-muted: #9A9990 !important;
+    --border: #3D3D3A !important;
 }
-.assistant-card .answer-bn { color: #F1EAD6 !important; }
-.assistant-card .badge { background: #1E3D37 !important; color: #E4C776 !important; }
-.ayah-frame { background: linear-gradient(180deg, #1B3A34, #142E29) !important; color: #E4C776 !important; }
-.translation-box { background: #17332D !important; color: #F1EAD6 !important; }
-.copy-btn, .related-btn { background: #17332D !important; color: #E4C776 !important; }
-.hikma-footer { color: #9FB0AC !important; border-top-color: #23453F !important; }
-.chip-label { color: #E4C776 !important; }
-.msg-meta { color: #9FB0AC !important; }
+.stApp { background: #262624 !important; }
+section[data-testid="stSidebar"] > div { background: #21211F !important; }
 </style>
 """
 st.markdown(BASE_CSS, unsafe_allow_html=True)
@@ -507,7 +443,6 @@ SUGGESTED_TOPICS = ["নামাজ", "রোজা", "যাকাত", "হ�
 
 
 def handle_query(query_text: str) -> None:
-    """Ask HIKMA a question and append both turns to the chat history."""
     now = datetime.now().strftime("%H:%M")
     st.session_state.messages.append({"role": "user", "content": query_text, "timestamp": now})
 
@@ -530,8 +465,6 @@ def handle_query(query_text: str) -> None:
 
 
 def stream_answer(placeholder, text: str) -> None:
-    """Reveal the answer progressively, similar to a live-typed response,
-    instead of dumping the whole paragraph at once."""
     steps = 40
     chunk = max(1, len(text) // steps)
     shown = ""
@@ -546,35 +479,33 @@ def stream_answer(placeholder, text: str) -> None:
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("## 🕌 HIKMA")
-    st.markdown("Islamic Knowledge AI")
+    st.markdown("#### 🕌 HIKMA")
+    st.caption("Islamic Knowledge AI")
     st.divider()
 
-    dark_toggle = st.toggle("🌙 ডার্ক মোড", value=st.session_state.dark_mode)
+    dark_toggle = st.toggle("Dark mode", value=st.session_state.dark_mode)
     if dark_toggle != st.session_state.dark_mode:
         st.session_state.dark_mode = dark_toggle
         st.rerun()
 
     st.divider()
-    st.markdown("### 🌐 যেভাবে জিজ্ঞাসা করবেন")
-    st.markdown(
-        "- **বাংলিশ:** namaj, roja, zakat\n"
-        "- **English:** salah, fasting, zakat\n"
-        "- **বাংলা:** নামাজ, রোজা, যাকাত"
-    )
+    st.markdown("**যেভাবে জিজ্ঞাসা করবেন**")
+    st.caption("বাংলিশ: namaj, roja, zakat")
+    st.caption("English: salah, fasting, zakat")
+    st.caption("বাংলা: নামাজ, রোজা, যাকাত")
 
     st.divider()
-    st.markdown("### 📊 এই সেশনে")
+    st.markdown("**এই সেশনে**")
     q_count = sum(1 for m in st.session_state.messages if m.get("role") == "user")
     c1, c2 = st.columns(2)
     c1.metric("প্রশ্ন", q_count)
     c2.metric("বার্তা", len(st.session_state.messages))
     if st.session_state.category_counts:
-        st.caption("বিষয় অনুযায়ী প্রশ্ন:")
+        st.caption("বিষয় অনুযায়ী প্রশ্ন")
         st.bar_chart(pd.Series(st.session_state.category_counts))
 
     st.divider()
-    st.markdown("### 📚 ডেটাসেট")
+    st.markdown("**ডেটাসেট**")
     st.metric("মোট এন্ট্রি", f"{len(df):,}")
     if "topic" in df.columns:
         st.caption(f"স্বতন্ত্র বিষয়: {df['topic'].nunique():,}")
@@ -582,62 +513,49 @@ with st.sidebar:
     if "category" in df.columns:
         categories = sorted(c for c in df["category"].unique() if str(c).strip())
         if categories:
-            chosen_cat = st.selectbox("📂 বিষয়শ্রেণি অনুসন্ধান করুন", ["—"] + categories)
+            chosen_cat = st.selectbox("বিষয়শ্রেণি অনুসন্ধান করুন", ["—"] + categories)
             if chosen_cat != "—":
-                sample_topics = (
-                    df[df["category"] == chosen_cat]["topic"].drop_duplicates().sample(
-                        min(6, df[df["category"] == chosen_cat]["topic"].nunique())
-                    )
-                )
+                pool = df[df["category"] == chosen_cat]["topic"].drop_duplicates()
+                sample_topics = pool.sample(min(6, len(pool)))
                 for t in sample_topics:
                     if st.button(f"↳ {t}", key=f"cat_{chosen_cat}_{t}", use_container_width=True):
                         handle_query(t)
                         st.rerun()
 
-    if st.button("🎲 এলোমেলো একটি বিষয় জিজ্ঞাসা করুন", use_container_width=True):
+    if st.button("🎲 এলোমেলো একটি বিষয়", use_container_width=True):
         random_topic = str(df.sample(1)["topic"].iloc[0])
         handle_query(random_topic)
         st.rerun()
 
     st.divider()
-    st.markdown("### ⭐ সংরক্ষিত উত্তর")
+    st.markdown("**⭐ সংরক্ষিত উত্তর**")
     if st.session_state.starred:
         for idx in sorted(st.session_state.starred):
             if idx < len(st.session_state.messages):
                 m = st.session_state.messages[idx]
-                label = m.get("topic") or m.get("content", "")[:30]
-                st.caption(f"• {label}")
+                st.caption(f"· {m.get('topic') or m.get('content', '')[:30]}")
     else:
         st.caption("এখনো কিছু সংরক্ষণ করা হয়নি।")
 
     st.divider()
     if st.session_state.messages:
-        transcript_lines = []
-        for m in st.session_state.messages:
-            speaker = "আপনি" if m["role"] == "user" else "HIKMA"
-            transcript_lines.append(f"**{speaker}** ({m.get('timestamp', '')}): {m['content']}")
-        transcript = "\n\n".join(transcript_lines)
+        transcript_lines = [
+            f"**{'আপনি' if m['role'] == 'user' else 'HIKMA'}** ({m.get('timestamp', '')}): {m['content']}"
+            for m in st.session_state.messages
+        ]
         st.download_button(
-            "⬇️ কথোপকথন ডাউনলোড করুন",
-            data=transcript,
+            "⬇️ কথোপকথন ডাউনলোড",
+            data="\n\n".join(transcript_lines),
             file_name="hikma_chat.md",
             mime="text/markdown",
             use_container_width=True,
         )
 
-    if st.button("🔄 কথোপকথন মুছুন", use_container_width=True):
+    if st.button("কথোপকথন মুছুন", use_container_width=True):
         st.session_state.messages = []
         st.session_state.starred = set()
         st.session_state.category_counts = Counter()
         st.rerun()
-
-    st.divider()
-    st.info(
-        "✅ বাংলিশ সমর্থন\n\n"
-        "✅ বাংলা ও ইংরেজি\n\n"
-        "✅ আরবি রেফারেন্স\n\n"
-        "✅ সূত্র-ভিত্তিক উত্তর"
-    )
 
 # ---------------------------------------------------------------------------
 # Header
@@ -645,19 +563,18 @@ with st.sidebar:
 st.markdown(
     """
     <div class="hikma-header">
-        <h1>HIKMA</h1>
-        <p>বাংলিশে জিজ্ঞাসা করুন, বাংলায় উত্তর পান — সূত্রসহ</p>
+        <span class="mark">🕌 HIKMA</span>
+        <span class="tagline">বাংলিশে জিজ্ঞাসা করুন, বাংলায় উত্তর পান</span>
     </div>
-    <div class="hikma-rule"></div>
     """,
     unsafe_allow_html=True,
 )
 
 # ---------------------------------------------------------------------------
-# Empty state — clickable topic chips
+# Empty state
 # ---------------------------------------------------------------------------
 if not st.session_state.messages:
-    st.markdown('<p class="chip-label">দ্রুত শুরু করতে একটি বিষয়ে ক্লিক করুন —</p>', unsafe_allow_html=True)
+    st.caption("দ্রুত শুরু করতে একটি বিষয়ে ক্লিক করুন")
     cols = st.columns(4)
     for i, topic in enumerate(SUGGESTED_TOPICS):
         if cols[i % 4].button(topic, key=f"chip_{topic}", use_container_width=True):
@@ -678,11 +595,10 @@ for i, msg in enumerate(st.session_state.messages):
     if msg["role"] == "user":
         st.markdown(
             f"""
-            <div class="msg-row" style="display:flex; justify-content:flex-end;">
-                <div>
-                    <div class="user-msg"><strong>আপনি</strong><br>{msg['content']}</div>
-                    <div class="msg-meta" style="text-align:right;">{msg.get('timestamp', '')}</div>
-                </div>
+            <div class="turn">
+                <div class="role-label user">আপনি</div>
+                <div class="user-bubble">{msg['content']}</div>
+                <div class="msg-meta" style="text-align:right;">{msg.get('timestamp', '')}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -696,114 +612,97 @@ for i, msg in enumerate(st.session_state.messages):
             conf_class, conf_label = css_class, label
             break
 
-    badges = '<span class="badge">HIKMA</span>'
+    tags = '<span class="tag">HIKMA</span>'
     if msg.get("topic"):
-        badges += f'<span class="badge">{msg["topic"]}</span>'
+        tags += f'<span class="tag">{msg["topic"]}</span>'
     if msg.get("category"):
-        badges += f'<span class="badge">{msg["category"]}</span>'
+        tags += f'<span class="tag">{msg["category"]}</span>'
 
-    col_icon, col_card = st.columns([1, 11])
-    with col_icon:
-        st.markdown("### 🕌")
-    with col_card:
-        st.markdown(
-            f"""
-            <div class="msg-row assistant-card">
-                {badges}
-            """,
-            unsafe_allow_html=True,
-        )
+    st.markdown(f'<div class="turn"><div class="tag-row">{tags}</div>', unsafe_allow_html=True)
 
-        answer_placeholder = st.empty()
-        if st.session_state.just_answered == i:
-            stream_answer(answer_placeholder, msg["content"])
-            st.session_state.just_answered = None
-        else:
-            answer_placeholder.markdown(f'<div class="answer-bn">{msg["content"]}</div>', unsafe_allow_html=True)
+    answer_placeholder = st.empty()
+    if st.session_state.just_answered == i:
+        stream_answer(answer_placeholder, msg["content"])
+        st.session_state.just_answered = None
+    else:
+        answer_placeholder.markdown(f'<div class="answer-bn">{msg["content"]}</div>', unsafe_allow_html=True)
 
-        st.markdown(
-            f"""
-                <div class="conf-pill {conf_class}">📊 {conf_label} · {int(conf * 100)}%</div>
-                <div class="msg-meta">{msg.get('timestamp', '')}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        f'<div class="conf-tag {conf_class}">{conf_label} · {int(conf * 100)}%</div>'
+        f'<div class="msg-meta">{msg.get("timestamp", "")}</div>',
+        unsafe_allow_html=True,
+    )
 
-        if msg.get("source"):
-            with st.expander("📖 সূত্র দেখুন"):
-                st.markdown(msg["source"])
+    if msg.get("source"):
+        with st.expander("সূত্র দেখুন"):
+            st.markdown(msg["source"])
 
-        if msg.get("arabic"):
-            with st.expander("🕋 আরবি পাঠ"):
-                st.markdown(
-                    f"""<div class="ayah-frame"><span class="bracket">﴿</span> {msg['arabic']} <span class="bracket">﴾</span></div>""",
-                    unsafe_allow_html=True,
-                )
-                if msg.get("arabic_bangla"):
-                    st.markdown(f'<div class="translation-box">{msg["arabic_bangla"]}</div>', unsafe_allow_html=True)
-
-        if msg.get("english"):
-            with st.expander("🌐 English"):
-                st.markdown(f'<div class="translation-box">{msg["english"]}</div>', unsafe_allow_html=True)
-
-        # Copy-to-clipboard
-        escaped_text = html.escape(msg["content"])
-        copy_id = f"copy_text_{i}"
-        st.markdown(
-            f"""
-            <span id="{copy_id}" style="display:none;">{escaped_text}</span>
-            <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('{copy_id}').innerText)">📋 কপি করুন</button>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # Did-you-mean suggestions for low-confidence / no-match answers
-        if conf <= 0.15:
-            suggestions = hikma.suggest_keywords(
-                st.session_state.messages[i - 1]["content"] if i > 0 else ""
+    if msg.get("arabic"):
+        with st.expander("আরবি পাঠ"):
+            st.markdown(
+                f'<div class="ayah-frame"><span class="bracket">﴿</span> {msg["arabic"]} <span class="bracket">﴾</span></div>',
+                unsafe_allow_html=True,
             )
-            if suggestions:
-                st.caption("এই বিষয়গুলো বুঝিয়ে থাকতে পারেন —")
-                s_cols = st.columns(len(suggestions))
-                for j, s in enumerate(suggestions):
-                    if s_cols[j].button(s, key=f"suggest_{i}_{j}"):
-                        handle_query(s)
-                        st.rerun()
+            if msg.get("arabic_bangla"):
+                st.markdown(f'<div class="translation-box">{msg["arabic_bangla"]}</div>', unsafe_allow_html=True)
 
-        # Related topics ("you might also ask")
-        if msg.get("category") and msg.get("topic"):
-            related = hikma.related_topics(msg["category"], msg["topic"])
-            if related:
-                st.caption("🔎 আরও জানতে পারেন —")
-                r_cols = st.columns(len(related))
-                for j, t in enumerate(related):
-                    if r_cols[j].button(t, key=f"related_{i}_{j}"):
-                        handle_query(t)
-                        st.rerun()
+    if msg.get("english"):
+        with st.expander("English"):
+            st.markdown(f'<div class="translation-box">{msg["english"]}</div>', unsafe_allow_html=True)
 
-        # Feedback + bookmark row
-        fb_key = f"fb_{i}"
-        fb1, fb2, fb3, _ = st.columns([1, 1, 1, 7])
-        if st.session_state.feedback.get(fb_key):
-            st.caption(f"✅ ধন্যবাদ — আপনার মতামত ({st.session_state.feedback[fb_key]}) গৃহীত হলো।")
-        else:
-            if fb1.button("👍", key=f"up_{i}"):
-                st.session_state.feedback[fb_key] = "সহায়ক"
-                st.rerun()
-            if fb2.button("👎", key=f"down_{i}"):
-                st.session_state.feedback[fb_key] = "উন্নতি প্রয়োজন"
-                st.rerun()
-        starred = i in st.session_state.starred
-        if fb3.button("⭐" if not starred else "✅", key=f"star_{i}"):
-            if starred:
-                st.session_state.starred.discard(i)
-            else:
-                st.session_state.starred.add(i)
+    escaped_text = html.escape(msg["content"])
+    copy_id = f"copy_text_{i}"
+    st.markdown(
+        f"""
+        <span id="{copy_id}" style="display:none;">{escaped_text}</span>
+        <button class="icon-btn" onclick="navigator.clipboard.writeText(document.getElementById('{copy_id}').innerText)">কপি করুন</button>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if conf <= 0.15:
+        suggestions = hikma.suggest_keywords(st.session_state.messages[i - 1]["content"] if i > 0 else "")
+        if suggestions:
+            st.caption("এই বিষয়গুলো বুঝিয়ে থাকতে পারেন")
+            s_cols = st.columns(len(suggestions))
+            for j, s in enumerate(suggestions):
+                if s_cols[j].button(s, key=f"suggest_{i}_{j}"):
+                    handle_query(s)
+                    st.rerun()
+
+    if msg.get("category") and msg.get("topic"):
+        related = hikma.related_topics(msg["category"], msg["topic"])
+        if related:
+            st.caption("আরও জানতে পারেন")
+            r_cols = st.columns(len(related))
+            for j, t in enumerate(related):
+                if r_cols[j].button(t, key=f"related_{i}_{j}"):
+                    handle_query(t)
+                    st.rerun()
+
+    fb_key = f"fb_{i}"
+    fb1, fb2, fb3, _ = st.columns([1, 1, 1, 7])
+    if st.session_state.feedback.get(fb_key):
+        st.caption(f"ধন্যবাদ — মতামত ({st.session_state.feedback[fb_key]}) গৃহীত হলো।")
+    else:
+        if fb1.button("👍", key=f"up_{i}"):
+            st.session_state.feedback[fb_key] = "সহায়ক"
             st.rerun()
+        if fb2.button("👎", key=f"down_{i}"):
+            st.session_state.feedback[fb_key] = "উন্নতি প্রয়োজন"
+            st.rerun()
+    starred = i in st.session_state.starred
+    if fb3.button("⭐" if not starred else "✓", key=f"star_{i}"):
+        if starred:
+            st.session_state.starred.discard(i)
+        else:
+            st.session_state.starred.add(i)
+        st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Input — Enter-to-send, auto-clears
+# Input
 # ---------------------------------------------------------------------------
 st.divider()
 with st.form("ask_form", clear_on_submit=True):
@@ -815,20 +714,16 @@ with st.form("ask_form", clear_on_submit=True):
             label_visibility="collapsed",
         )
     with col_submit:
-        submitted = st.form_submit_button("🤖 জিজ্ঞাসা করুন", use_container_width=True)
+        submitted = st.form_submit_button("জিজ্ঞাসা করুন", use_container_width=True)
 
 if submitted and user_input.strip():
     handle_query(user_input.strip())
     st.rerun()
 
-# ---------------------------------------------------------------------------
-# Footer
-# ---------------------------------------------------------------------------
 st.markdown(
     """
     <div class="hikma-footer">
-        <strong>HIKMA</strong> — Islamic Knowledge AI<br>
-        <small>স্পষ্ট প্রশ্ন • নির্ভরযোগ্য উত্তর • যাচাইকৃত সূত্র</small>
+        HIKMA — স্পষ্ট প্রশ্ন · নির্ভরযোগ্য উত্তর · যাচাইকৃত সূত্র
     </div>
     """,
     unsafe_allow_html=True,
