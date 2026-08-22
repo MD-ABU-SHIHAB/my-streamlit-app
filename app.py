@@ -7,10 +7,13 @@ requirements.txt, and dataset.csv.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import datetime
 from difflib import get_close_matches
 from functools import lru_cache
 from pathlib import Path
+import html
 import re
+import time
 
 import pandas as pd
 import streamlit as st
@@ -155,6 +158,33 @@ class HIKMA:
         best_idx, best_score = scores.most_common(1)[0]
         return self.df.iloc[best_idx], best_score
 
+    def suggest_keywords(self, query: str, n: int = 5) -> list[str]:
+        """Public helper for 'did you mean' suggestions: closest known keywords
+        to whatever the user typed, for use when nothing matched at all."""
+        query = self._normalize_text(query)
+        words = [w for w in query.split() if len(w) > 2] or [query]
+        suggestions: list[str] = []
+        for word in words:
+            suggestions.extend(get_close_matches(word, self.all_keywords, n=n, cutoff=0.5))
+        # de-duplicate while preserving order
+        seen = set()
+        unique = []
+        for s in suggestions:
+            if s not in seen:
+                seen.add(s)
+                unique.append(s)
+        return unique[:n]
+
+    def related_topics(self, category: str, exclude_topic: str, n: int = 3) -> list[str]:
+        """Other topics sharing the same category, for 'you might also ask' chips."""
+        if not category:
+            return []
+        pool = self.df[(self.df["category"] == category) & (self.df["topic"] != exclude_topic)]
+        if pool.empty:
+            return []
+        sample = pool["topic"].drop_duplicates()
+        return sample.sample(min(n, len(sample))).tolist()
+
     # ---- public API ----
     @lru_cache(maxsize=512)
     def _ask_cached(self, normalized_query: str) -> dict:
@@ -211,7 +241,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-CSS = """
+BASE_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Tiro+Bangla&family=Inter:wght@400;500;600;700&display=swap');
 
@@ -229,7 +259,7 @@ CSS = """
 }
 
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.stApp { background: var(--parchment); }
+.stApp { background: var(--parchment); transition: background 0.3s ease; }
 
 .hikma-header {
     position: relative;
@@ -301,6 +331,12 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 }
 .msg-row { animation: fadeInUp 0.35s ease; margin: 0.7rem 0; }
 
+.msg-meta {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 0.3rem;
+}
+
 .user-msg {
     background: var(--teal-deep);
     color: #F7F1E1;
@@ -338,7 +374,14 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     font-size: 1.15rem;
     line-height: 1.75;
     color: var(--ink);
+    min-height: 1.6rem;
 }
+.cursor-blink::after {
+    content: "▌";
+    animation: blink 0.9s steps(1) infinite;
+    color: var(--gold);
+}
+@keyframes blink { 50% { opacity: 0; } }
 
 .conf-pill {
     display: inline-flex;
@@ -377,6 +420,22 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     color: var(--ink);
 }
 
+.copy-btn, .related-btn {
+    display: inline-block;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--teal-deep);
+    background: var(--parchment-dim);
+    border: 1px solid var(--teal-light);
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    margin: 0.5rem 0.3rem 0 0;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.copy-btn:hover, .related-btn:hover { background: var(--teal-deep); color: var(--gold-light); }
+
 section[data-testid="stSidebar"] {
     background: var(--teal-deep);
     color: var(--parchment);
@@ -395,13 +454,44 @@ section[data-testid="stSidebar"] hr { border-color: rgba(247,241,225,0.2); }
 }
 </style>
 """
-st.markdown(CSS, unsafe_allow_html=True)
 
-# ---- session state & data ----
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "feedback" not in st.session_state:
-    st.session_state.feedback = {}
+DARK_CSS = """
+<style>
+.stApp { background: #0E1F1D !important; }
+.assistant-card {
+    background: #14302B !important;
+    border-color: #23453F !important;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.35) !important;
+}
+.assistant-card .answer-bn { color: #F1EAD6 !important; }
+.assistant-card .badge { background: #1E3D37 !important; color: #E4C776 !important; }
+.ayah-frame { background: linear-gradient(180deg, #1B3A34, #142E29) !important; color: #E4C776 !important; }
+.translation-box { background: #17332D !important; color: #F1EAD6 !important; }
+.copy-btn, .related-btn { background: #17332D !important; color: #E4C776 !important; }
+.hikma-footer { color: #9FB0AC !important; border-top-color: #23453F !important; }
+.chip-label { color: #E4C776 !important; }
+.msg-meta { color: #9FB0AC !important; }
+</style>
+"""
+st.markdown(BASE_CSS, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Session state & data
+# ---------------------------------------------------------------------------
+DEFAULTS = {
+    "messages": [],
+    "feedback": {},
+    "starred": set(),
+    "category_counts": Counter(),
+    "dark_mode": False,
+    "just_answered": None,
+}
+for key, default in DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+if st.session_state.dark_mode:
+    st.markdown(DARK_CSS, unsafe_allow_html=True)
 
 if "hikma" not in st.session_state:
     try:
@@ -410,25 +500,23 @@ if "hikma" not in st.session_state:
         st.error(f"⚠️ dataset.csv লোড করা যায়নি:\n\n**{e}**")
         st.stop()
 
-try:
-    df = st.session_state.hikma.df
-    dataset_loaded = True
-except Exception:
-    df = None
-    dataset_loaded = False
+hikma: HIKMA = st.session_state.hikma
+df = hikma.df
 
 SUGGESTED_TOPICS = ["নামাজ", "রোজা", "যাকাত", "হজ্জ", "ওযু", "সুদ", "কুরবানি", "তাহাজ্জুদ"]
 
 
 def handle_query(query_text: str) -> None:
     """Ask HIKMA a question and append both turns to the chat history."""
-    st.session_state.messages.append({"role": "user", "content": query_text})
-    response = st.session_state.hikma.ask(query_text)
+    now = datetime.now().strftime("%H:%M")
+    st.session_state.messages.append({"role": "user", "content": query_text, "timestamp": now})
 
+    response = hikma.ask(query_text)
     msg_data = {
         "role": "assistant",
         "content": response["bangla"],
         "confidence": response["confidence"],
+        "timestamp": datetime.now().strftime("%H:%M"),
     }
     for key in ("english", "arabic", "arabic_bangla", "source", "category", "topic"):
         val = response.get(key)
@@ -436,42 +524,111 @@ def handle_query(query_text: str) -> None:
             msg_data[key] = val
 
     st.session_state.messages.append(msg_data)
+    if msg_data.get("category"):
+        st.session_state.category_counts[msg_data["category"]] += 1
+    st.session_state.just_answered = len(st.session_state.messages) - 1
 
 
-# ---- sidebar ----
+def stream_answer(placeholder, text: str) -> None:
+    """Reveal the answer progressively, similar to a live-typed response,
+    instead of dumping the whole paragraph at once."""
+    steps = 40
+    chunk = max(1, len(text) // steps)
+    shown = ""
+    for i in range(0, len(text), chunk):
+        shown = text[: i + chunk]
+        placeholder.markdown(f'<div class="answer-bn cursor-blink">{shown}</div>', unsafe_allow_html=True)
+        time.sleep(0.012)
+    placeholder.markdown(f'<div class="answer-bn">{text}</div>', unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("## 🕌 HIKMA")
     st.markdown("Islamic Knowledge AI")
     st.divider()
 
+    dark_toggle = st.toggle("🌙 ডার্ক মোড", value=st.session_state.dark_mode)
+    if dark_toggle != st.session_state.dark_mode:
+        st.session_state.dark_mode = dark_toggle
+        st.rerun()
+
+    st.divider()
     st.markdown("### 🌐 যেভাবে জিজ্ঞাসা করবেন")
     st.markdown(
         "- **বাংলিশ:** namaj, roja, zakat\n"
         "- **English:** salah, fasting, zakat\n"
         "- **বাংলা:** নামাজ, রোজা, যাকাত"
     )
-    st.divider()
 
+    st.divider()
     st.markdown("### 📊 এই সেশনে")
     q_count = sum(1 for m in st.session_state.messages if m.get("role") == "user")
     c1, c2 = st.columns(2)
     c1.metric("প্রশ্ন", q_count)
     c2.metric("বার্তা", len(st.session_state.messages))
-
-    if dataset_loaded:
-        st.divider()
-        st.markdown("### 📚 ডেটাসেট")
-        st.metric("মোট এন্ট্রি", f"{len(df):,}")
-        if "topic" in df.columns:
-            st.caption(f"স্বতন্ত্র বিষয়: {df['topic'].nunique():,}")
-        if st.button("🎲 এলোমেলো একটি বিষয় জিজ্ঞাসা করুন", use_container_width=True):
-            random_topic = str(df.sample(1)["topic"].iloc[0])
-            handle_query(random_topic)
-            st.rerun()
+    if st.session_state.category_counts:
+        st.caption("বিষয় অনুযায়ী প্রশ্ন:")
+        st.bar_chart(pd.Series(st.session_state.category_counts))
 
     st.divider()
+    st.markdown("### 📚 ডেটাসেট")
+    st.metric("মোট এন্ট্রি", f"{len(df):,}")
+    if "topic" in df.columns:
+        st.caption(f"স্বতন্ত্র বিষয়: {df['topic'].nunique():,}")
+
+    if "category" in df.columns:
+        categories = sorted(c for c in df["category"].unique() if str(c).strip())
+        if categories:
+            chosen_cat = st.selectbox("📂 বিষয়শ্রেণি অনুসন্ধান করুন", ["—"] + categories)
+            if chosen_cat != "—":
+                sample_topics = (
+                    df[df["category"] == chosen_cat]["topic"].drop_duplicates().sample(
+                        min(6, df[df["category"] == chosen_cat]["topic"].nunique())
+                    )
+                )
+                for t in sample_topics:
+                    if st.button(f"↳ {t}", key=f"cat_{chosen_cat}_{t}", use_container_width=True):
+                        handle_query(t)
+                        st.rerun()
+
+    if st.button("🎲 এলোমেলো একটি বিষয় জিজ্ঞাসা করুন", use_container_width=True):
+        random_topic = str(df.sample(1)["topic"].iloc[0])
+        handle_query(random_topic)
+        st.rerun()
+
+    st.divider()
+    st.markdown("### ⭐ সংরক্ষিত উত্তর")
+    if st.session_state.starred:
+        for idx in sorted(st.session_state.starred):
+            if idx < len(st.session_state.messages):
+                m = st.session_state.messages[idx]
+                label = m.get("topic") or m.get("content", "")[:30]
+                st.caption(f"• {label}")
+    else:
+        st.caption("এখনো কিছু সংরক্ষণ করা হয়নি।")
+
+    st.divider()
+    if st.session_state.messages:
+        transcript_lines = []
+        for m in st.session_state.messages:
+            speaker = "আপনি" if m["role"] == "user" else "HIKMA"
+            transcript_lines.append(f"**{speaker}** ({m.get('timestamp', '')}): {m['content']}")
+        transcript = "\n\n".join(transcript_lines)
+        st.download_button(
+            "⬇️ কথোপকথন ডাউনলোড করুন",
+            data=transcript,
+            file_name="hikma_chat.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+
     if st.button("🔄 কথোপকথন মুছুন", use_container_width=True):
         st.session_state.messages = []
+        st.session_state.starred = set()
+        st.session_state.category_counts = Counter()
         st.rerun()
 
     st.divider()
@@ -482,7 +639,9 @@ with st.sidebar:
         "✅ সূত্র-ভিত্তিক উত্তর"
     )
 
-# ---- header ----
+# ---------------------------------------------------------------------------
+# Header
+# ---------------------------------------------------------------------------
 st.markdown(
     """
     <div class="hikma-header">
@@ -494,7 +653,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---- empty state: clickable topic chips ----
+# ---------------------------------------------------------------------------
+# Empty state — clickable topic chips
+# ---------------------------------------------------------------------------
 if not st.session_state.messages:
     st.markdown('<p class="chip-label">দ্রুত শুরু করতে একটি বিষয়ে ক্লিক করুন —</p>', unsafe_allow_html=True)
     cols = st.columns(4)
@@ -504,7 +665,9 @@ if not st.session_state.messages:
             st.rerun()
     st.write("")
 
-# ---- chat history ----
+# ---------------------------------------------------------------------------
+# Chat history
+# ---------------------------------------------------------------------------
 CONF_LABELS = [
     (0.8, "conf-high", "উচ্চ আস্থা"),
     (0.5, "conf-med", "মাঝারি আস্থা"),
@@ -516,7 +679,10 @@ for i, msg in enumerate(st.session_state.messages):
         st.markdown(
             f"""
             <div class="msg-row" style="display:flex; justify-content:flex-end;">
-                <div class="user-msg"><strong>আপনি</strong><br>{msg['content']}</div>
+                <div>
+                    <div class="user-msg"><strong>আপনি</strong><br>{msg['content']}</div>
+                    <div class="msg-meta" style="text-align:right;">{msg.get('timestamp', '')}</div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -544,8 +710,21 @@ for i, msg in enumerate(st.session_state.messages):
             f"""
             <div class="msg-row assistant-card">
                 {badges}
-                <div class="answer-bn">{msg['content']}</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        answer_placeholder = st.empty()
+        if st.session_state.just_answered == i:
+            stream_answer(answer_placeholder, msg["content"])
+            st.session_state.just_answered = None
+        else:
+            answer_placeholder.markdown(f'<div class="answer-bn">{msg["content"]}</div>', unsafe_allow_html=True)
+
+        st.markdown(
+            f"""
                 <div class="conf-pill {conf_class}">📊 {conf_label} · {int(conf * 100)}%</div>
+                <div class="msg-meta">{msg.get('timestamp', '')}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -568,19 +747,64 @@ for i, msg in enumerate(st.session_state.messages):
             with st.expander("🌐 English"):
                 st.markdown(f'<div class="translation-box">{msg["english"]}</div>', unsafe_allow_html=True)
 
+        # Copy-to-clipboard
+        escaped_text = html.escape(msg["content"])
+        copy_id = f"copy_text_{i}"
+        st.markdown(
+            f"""
+            <span id="{copy_id}" style="display:none;">{escaped_text}</span>
+            <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('{copy_id}').innerText)">📋 কপি করুন</button>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Did-you-mean suggestions for low-confidence / no-match answers
+        if conf <= 0.15:
+            suggestions = hikma.suggest_keywords(
+                st.session_state.messages[i - 1]["content"] if i > 0 else ""
+            )
+            if suggestions:
+                st.caption("এই বিষয়গুলো বুঝিয়ে থাকতে পারেন —")
+                s_cols = st.columns(len(suggestions))
+                for j, s in enumerate(suggestions):
+                    if s_cols[j].button(s, key=f"suggest_{i}_{j}"):
+                        handle_query(s)
+                        st.rerun()
+
+        # Related topics ("you might also ask")
+        if msg.get("category") and msg.get("topic"):
+            related = hikma.related_topics(msg["category"], msg["topic"])
+            if related:
+                st.caption("🔎 আরও জানতে পারেন —")
+                r_cols = st.columns(len(related))
+                for j, t in enumerate(related):
+                    if r_cols[j].button(t, key=f"related_{i}_{j}"):
+                        handle_query(t)
+                        st.rerun()
+
+        # Feedback + bookmark row
         fb_key = f"fb_{i}"
+        fb1, fb2, fb3, _ = st.columns([1, 1, 1, 7])
         if st.session_state.feedback.get(fb_key):
             st.caption(f"✅ ধন্যবাদ — আপনার মতামত ({st.session_state.feedback[fb_key]}) গৃহীত হলো।")
         else:
-            fb1, fb2, _ = st.columns([1, 1, 8])
             if fb1.button("👍", key=f"up_{i}"):
                 st.session_state.feedback[fb_key] = "সহায়ক"
                 st.rerun()
             if fb2.button("👎", key=f"down_{i}"):
                 st.session_state.feedback[fb_key] = "উন্নতি প্রয়োজন"
                 st.rerun()
+        starred = i in st.session_state.starred
+        if fb3.button("⭐" if not starred else "✅", key=f"star_{i}"):
+            if starred:
+                st.session_state.starred.discard(i)
+            else:
+                st.session_state.starred.add(i)
+            st.rerun()
 
-# ---- input: Enter-to-send, auto-clears ----
+# ---------------------------------------------------------------------------
+# Input — Enter-to-send, auto-clears
+# ---------------------------------------------------------------------------
 st.divider()
 with st.form("ask_form", clear_on_submit=True):
     col_input, col_submit = st.columns([6, 1])
@@ -594,11 +818,12 @@ with st.form("ask_form", clear_on_submit=True):
         submitted = st.form_submit_button("🤖 জিজ্ঞাসা করুন", use_container_width=True)
 
 if submitted and user_input.strip():
-    with st.spinner("🕌 হিকমা উত্তর খুঁজছে..."):
-        handle_query(user_input.strip())
+    handle_query(user_input.strip())
     st.rerun()
 
-# ---- footer ----
+# ---------------------------------------------------------------------------
+# Footer
+# ---------------------------------------------------------------------------
 st.markdown(
     """
     <div class="hikma-footer">
