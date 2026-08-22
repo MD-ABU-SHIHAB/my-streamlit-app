@@ -455,16 +455,45 @@ html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; color: var(--tex
 section[data-testid="stSidebar"] > div {{ background: var(--bg-alt); }}
 section[data-testid="stSidebar"] {{ border-right: 1px solid var(--border); }}
 
+/* Centered chat column, like Claude.ai's own layout, instead of full-width */
+div.block-container {{ max-width: 760px; padding-bottom: 8rem; }}
+
 .hikma-header {{
-    display: flex; align-items: baseline; gap: 0.6rem;
-    padding: 1.4rem 0 1rem; border-bottom: 1px solid var(--border); margin-bottom: 1.2rem;
+    display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+    padding: 1rem 0; margin-bottom: 0.4rem;
 }}
 .hikma-header .mark {{
     font-family: 'Source Serif 4', serif; font-weight: 600;
-    font-size: calc(1.9rem * var(--font-scale)); color: var(--text);
+    font-size: calc(1.25rem * var(--font-scale)); color: var(--text);
 }}
-.hikma-header .tagline {{
-    font-family: 'Tiro Bangla', serif; font-size: calc(0.98rem * var(--font-scale)); color: var(--text-muted);
+.hikma-header .tagline {{ display: none; }}
+
+/* Greeting screen, shown when the chat is empty */
+.greeting-wrap {{ text-align: center; padding: 3.5rem 0 1.5rem; }}
+.greeting-wrap .greet {{
+    font-family: 'Source Serif 4', serif; font-weight: 600;
+    font-size: calc(2.1rem * var(--font-scale)); color: var(--text); margin-bottom: 0.3rem;
+}}
+.greeting-wrap .sub {{
+    font-family: 'Tiro Bangla', serif; font-size: calc(1.05rem * var(--font-scale)); color: var(--text-muted);
+}}
+
+/* Composer — the bottom input bar, styled as one rounded pill like Claude's message box */
+div[data-testid="stForm"] {{
+    border: 1px solid var(--border) !important;
+    border-radius: 26px !important;
+    background: var(--bg-card) !important;
+    padding: 0.5rem 0.6rem !important;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+}}
+div[data-testid="stForm"] div[data-testid="stTextInput"] input {{
+    border: none !important; background: transparent !important; box-shadow: none !important;
+    font-family: 'Tiro Bangla', serif; font-size: calc(1rem * var(--font-scale));
+}}
+div[data-testid="stForm"] div[data-testid="stTextInput"] > div {{ border: none !important; background: transparent !important; }}
+div[data-testid="stFormSubmitButton"] > button {{
+    border-radius: 999px !important; width: 2.4rem !important; height: 2.4rem !important;
+    padding: 0 !important; min-height: 2.4rem !important;
 }}
 
 .stButton > button {{
@@ -663,6 +692,13 @@ def stream_answer(placeholder, text: str) -> None:
 with st.sidebar:
     st.markdown("#### 🕌 HIKMA")
     st.caption("Islamic Knowledge AI")
+
+    if st.button("✚ নতুন কথোপকথন", use_container_width=True, type="primary"):
+        st.session_state.messages = []
+        st.session_state.starred = set()
+        st.session_state.category_counts = Counter()
+        st.rerun()
+
     st.divider()
 
     dark_toggle = st.toggle("Dark mode", value=st.session_state.dark_mode)
@@ -748,22 +784,11 @@ with st.sidebar:
             file_name="hikma_chat.csv", mime="text/csv", use_container_width=True,
         )
 
-    if st.button("কথোপকথন মুছুন", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.starred = set()
-        st.session_state.category_counts = Counter()
-        st.rerun()
-
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
 st.markdown(
-    """
-    <div class="hikma-header">
-        <span class="mark">🕌 HIKMA</span>
-        <span class="tagline">বাংলিশে জিজ্ঞাসা করুন, বাংলায় উত্তর পান</span>
-    </div>
-    """,
+    """<div class="hikma-header"><span class="mark">🕌 HIKMA</span></div>""",
     unsafe_allow_html=True,
 )
 
@@ -777,7 +802,15 @@ tab_chat, tab_zakat, tab_qibla, tab_prayer, tab_browse, tab_quiz, tab_flash = st
 # ===========================================================================
 with tab_chat:
     if not st.session_state.messages:
-        st.caption("দ্রুত শুরু করতে একটি বিষয়ে ক্লিক করুন")
+        st.markdown(
+            """
+            <div class="greeting-wrap">
+                <div class="greet">আসসালামু আলাইকুম</div>
+                <div class="sub">আজ কী জানতে চান?</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         cols = st.columns(4)
         for i, topic in enumerate(SUGGESTED_TOPICS):
             if cols[i % 4].button(topic, key=f"chip_{topic}", use_container_width=True):
@@ -899,17 +932,16 @@ with tab_chat:
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.divider()
     with st.form("ask_form", clear_on_submit=True):
-        col_input, col_submit = st.columns([6, 1])
+        col_input, col_submit = st.columns([9, 1])
         with col_input:
             user_input = st.text_input(
                 "প্রশ্ন করুন",
-                placeholder="বাংলিশে (namaj), ইংরেজিতে (salah), বা বাংলায় (নামাজ) লিখুন...",
+                placeholder="HIKMA-কে প্রশ্ন করুন...",
                 label_visibility="collapsed",
             )
         with col_submit:
-            submitted = st.form_submit_button("জিজ্ঞাসা করুন", use_container_width=True)
+            submitted = st.form_submit_button("➤", use_container_width=True)
 
     if submitted and user_input.strip():
         handle_query(user_input.strip())
